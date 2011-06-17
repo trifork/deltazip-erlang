@@ -27,6 +27,8 @@
 -define(METHOD_UNCOMPRESSED, 0).
 -define(METHOD_CHUNKED_DEFLATE, 2).
 
+-define(EXCLUDE_ZLIB_HEADERS, 1).
+
 %%%-------------------- API --------------------
 
 open(_Access={GetSizeFun, PReadFun}) when is_function(GetSizeFun,0),
@@ -233,7 +235,12 @@ take_chunk(MaxSize, Bin) when MaxSize =< byte_size(Bin) ->
     <<Chunk:MaxSize/binary, Rest/binary>> = Bin,
     {Chunk, Rest}.
 
+%% -ifdef(EXCLUDE_ZLIB_HEADERS).
 -define(ZLIB_WINDOW_SIZE_BITS, -15).
+%% -else.
+%% -define(ZLIB_WINDOW_SIZE_BITS, 15).
+%% -endif.
+
 deflate(Z, Data, RefData) ->
     zlib:deflateInit(Z, best_compression, deflated, ?ZLIB_WINDOW_SIZE_BITS, 9, default),
     zlib:deflateSetDictionary(Z, RefData),
@@ -241,6 +248,16 @@ deflate(Z, Data, RefData) ->
     zlib:deflateEnd(Z),
     CompData.
     
+-ifdef(EXCLUDE_ZLIB_HEADERS).
+inflate(Z, CompData, RefData) ->
+    zlib:inflateInit(Z, ?ZLIB_WINDOW_SIZE_BITS),
+
+    zlib:inflateSetDictionary(Z, RefData),
+    Data = zlib:inflate(Z, CompData),
+
+    zlib:inflateEnd(Z),
+    Data.
+-else.
 inflate(Z, CompData, RefData) ->
     zlib:inflateInit(Z, ?ZLIB_WINDOW_SIZE_BITS),
 
@@ -249,8 +266,10 @@ inflate(Z, CompData, RefData) ->
 	   catch error:{need_dictionary, _} ->
 		   zlib:inflateSetDictionary(Z, RefData),
 		   zlib:inflate(Z, CompData)
-	   end,
+	   end
+    end,
     zlib:inflateEnd(Z),
     Data.
+-endif.
     
 
