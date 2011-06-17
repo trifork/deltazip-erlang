@@ -10,6 +10,8 @@ interpret_command(["create", DZFile | InputFiles]) ->
     do_create(DZFile, InputFiles);
 interpret_command(["get", DZFile]) ->
     do_get(DZFile);
+interpret_command(["get", "@" ++ NrStr, DZFile]) ->
+    do_get(DZFile, list_to_integer(NrStr));
 interpret_command(["count", DZFile]) ->
     do_count(DZFile).
 %%%======================================================================
@@ -28,11 +30,21 @@ do_create(DZFile, InputFiles) ->
 
 %%%----------
 do_get(DZFile) ->
+    do_get(DZFile, 0).
+
+%%% Get version Nr counted from the most recent.
+do_get(DZFile, Nr) ->
     {ok, Fd} = file:open(DZFile, [read, binary]),
     Access = fd_access(Fd),
     DZ = deltazip:open(Access),
-    Data = deltazip:get(DZ),
-    deltazip:close(DZ),
+    DZ2 = lists:foldl(fun(_,LocalDZ) ->
+			      {ok, LocalDZ2} = deltazip:previous(LocalDZ),
+			      LocalDZ2
+		      end,
+		      DZ,
+		      lists:seq(1,Nr)),
+    Data = deltazip:get(DZ2),
+    deltazip:close(DZ2),
     ok = file:close(Fd),
     io:put_chars(Data). % TODO: Is non-ascii data handled correctly?
 
