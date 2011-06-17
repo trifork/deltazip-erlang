@@ -1,7 +1,7 @@
 -module(deltazip).
 -compile(export_all).
 
--export([open/1, get/1, previous/1, add/2, close/1]).
+-export([open/1, get/1, previous/1, add/2, add_multiple/2, close/1]).
 
 -record(dzstate, {get_size_fun :: fun(() -> integer()),
 		  pread_fun    :: fun((integer(),integer()) -> {ok, binary()} | {error,_}),
@@ -65,6 +65,18 @@ add(State, NewRev) ->
 	    {PrefixLength, NewTail}
     end.
 
+add_multiple(State, NewRevs) ->
+    case previous(set_initial_position(State)) of
+	{error, at_beginning} ->
+	    Z = State#dzstate.zip_handle,
+	    {0, pack_multiple(NewRevs, Z)};
+	{ok, #dzstate{current_version = LastRev,
+		      current_pos = PrefixLength,
+		      zip_handle = Z}} ->
+	    NewTail = pack_multiple([LastRev | NewRevs], Z),
+	    {PrefixLength, NewTail}
+    end.
+
 close(#dzstate{zip_handle=Z}) ->
     zlib:close(Z).
 
@@ -92,6 +104,13 @@ compute_current_version(State=#dzstate{current_pos=Pos,
     Bin = safe_pread(State, Pos+4, Size),
     State#dzstate{current_version = unpack_entry(State, Method,Bin)}.
 
+pack_multiple([], _Z) ->
+    [];
+pack_multiple([Data], _Z) ->
+    envelope(pack_uncompressed(Data));
+pack_multiple([Data | [NextData|_]=Rest], Z) ->
+    [envelope(pack_chunked_deflate(Data, NextData, Z))
+     | pack_multiple(Rest, Z)].
 
 %%%----------
 

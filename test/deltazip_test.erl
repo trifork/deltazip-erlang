@@ -1,6 +1,7 @@
 -module(deltazip_test).
 
 -include_lib("eunit/include/eunit.hrl").
+-compile(export_all).
 
 empty_test() ->
     Bin0 = <<>>,
@@ -72,6 +73,14 @@ random_test_() ->
 	     test_random(Revs, [], <<>>)
      end}.
 
+random_batch_test_() ->
+    {timeout, 90,
+     fun() ->
+	     Batches = [[rnd_binary() || _ <- lists:seq(1,random:uniform(10))]
+		     || _ <- lists:seq(1,20)],
+	     test_batches(Batches, [], <<>>)
+     end}.
+
 
 random_patches_test_() ->
     {timeout, 300,
@@ -81,6 +90,22 @@ random_patches_test_() ->
 	     test_random(Revs, [], <<>>)
      end}.
 
+random_patch_batch_test_() ->
+    {timeout, 300,
+     fun() ->
+	     {A,B,C} = now(), random:seed(A,B,C),
+	     Batches = batch_randomly(random_patches(200)),
+	     test_batches(Batches, [], <<>>)
+     end}.
+
+batch_randomly([]) -> [];
+batch_randomly(L) ->
+    Len = length(L),
+    BatchSz = random:uniform(min(Len, 10) + 1) - 1,
+    {A,B} = lists:split(BatchSz, L),
+    [A | batch_randomly(B)].
+
+
 test_random([], _OldRevs, _Bin) ->
     ok;
 test_random([Rev|Revs], OldRevs, Bin) ->
@@ -88,6 +113,31 @@ test_random([Rev|Revs], OldRevs, Bin) ->
     Access = access(Bin),
     DZ = deltazip:open(Access),
 
+    verify_history(DZ, OldRevs),
+
+    %% Add Rev:
+    AddSpec = deltazip:add(DZ, Rev),
+    Bin2 = replace_tail(Bin, AddSpec),
+    deltazip:close(DZ),
+    test_random(Revs, [Rev|OldRevs], Bin2).
+
+
+test_batches([], _OldRevs, _Bin) ->
+    ok;
+test_batches([Batch|Batches], OldRevs, Bin) ->
+    io:format(user, "SZ| #~p: ~p -> ~p\n", [length(OldRevs), iolist_size(OldRevs), byte_size(Bin)]),
+    Access = access(Bin),
+    DZ = deltazip:open(Access),
+
+    verify_history(DZ, OldRevs),
+
+    %% Add Batch:
+    AddSpec = deltazip:add_multiple(DZ, Batch),
+    Bin2 = replace_tail(Bin, AddSpec),
+    deltazip:close(DZ),
+    test_batches(Batches, lists:reverse(Batch,OldRevs), Bin2).
+
+verify_history(DZ, OldRevs) ->
     DZrewind = lists:foldl(fun(OldRev,LocalDZ) ->
 				   Gotten = deltazip:get(LocalDZ),
 				   {true,_} = {OldRev == Gotten, Gotten},
@@ -100,14 +150,7 @@ test_random([Rev|Revs], OldRevs, Bin) ->
     case DZrewind of
 	at_beginning -> ok;
 	_ -> {error, at_beginning} = deltazip:previous(DZrewind)
-    end,
-
-    %% Add Rev:
-    AddSpec = deltazip:add(DZ, Rev),
-    Bin2 = replace_tail(Bin, AddSpec),
-    deltazip:close(DZ),
-    test_random(Revs, [Rev|OldRevs], Bin2).
-
+    end.
 
 random_patches(N) ->
     {Rnds, _Acc} =
