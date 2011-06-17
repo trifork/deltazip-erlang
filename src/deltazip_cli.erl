@@ -3,8 +3,9 @@
 -export([main/1]).
 
 main(L) ->
+    put(exit_code, 0),
     interpret_command(L),
-    init:stop().
+    init:stop(get(exit_code)).
 
 interpret_command(["create", DZFile | InputFiles]) ->
     do_create(DZFile, InputFiles);
@@ -37,16 +38,24 @@ do_get(DZFile, Nr) ->
     {ok, Fd} = file:open(DZFile, [read, binary]),
     Access = fd_access(Fd),
     DZ = deltazip:open(Access),
-    DZ2 = lists:foldl(fun(_,LocalDZ) ->
-			      {ok, LocalDZ2} = deltazip:previous(LocalDZ),
-			      LocalDZ2
+    DZ2 = lists:foldl(fun(_,at_beginning) -> at_beginning;
+			 (_,LocalDZ) ->
+			      case deltazip:previous(LocalDZ) of
+				  {ok, LocalDZ2} -> LocalDZ2;
+				  {error,at_beginning} -> at_beginning
+			      end
 		      end,
 		      DZ,
 		      lists:seq(1,Nr)),
-    Data = deltazip:get(DZ2),
-    deltazip:close(DZ2),
-    ok = file:close(Fd),
-    io:put_chars(Data). % TODO: Is non-ascii data handled correctly?
+    if DZ2 == at_beginning ->
+	    io:format(standard_error, "No version ~p exists\n", [Nr]),
+	    put(exit_code, 1);
+       true ->
+	    Data = deltazip:get(DZ2),
+	    deltazip:close(DZ2),
+	    ok = file:close(Fd),
+	    io:put_chars(Data) % TODO: Is non-ascii data handled correctly?
+    end.
 
 %%%----------
 do_count(DZFile) ->
