@@ -171,7 +171,7 @@ pack_chunked_deflate2(Data, RefData, Z) ->
     Options = gen_chunk_deflate_options(byte_size(Data), byte_size(RefData)),
     EvaledOptions = lists:map(fun(Opt) -> evaluate_deflate_option(Opt, Data, RefData, Z) end,
 			      Options),
-    SortedOptions = lists:keysort(1, EvaledOptions),
+    SortedOptions = lists:keysort(#evaled_deflate_option.ratio, EvaledOptions),
     BestOption = hd(SortedOptions),
     #evaled_deflate_option{chunk_method=CM, comp_data=CompData, data_rest=DataRest, ref_rest=RefRest} = BestOption,
     
@@ -188,7 +188,7 @@ gen_chunk_deflate_options(DataSz, RefDataSz) ->
      || RSkipSpec <- [0,1,2,3],
 	DSize <- begin
 		     RSkip = spec_to_rskip(RSkipSpec),
-		     AllRefDataVisible = RefDataSz - RSkip =< ?WINDOW_SIZE,
+		     AllRefDataVisible = (RefDataSz - RSkip =< ?WINDOW_SIZE) andalso (DataSz =< ?WINDOW_SIZE),
 		     if AllRefDataVisible ->
 			     %% All of RefData is visible.
 			     %% Use the rest of the data (but ensure that
@@ -233,7 +233,7 @@ take_chunk(MaxSize, Bin) when MaxSize =< byte_size(Bin) ->
     <<Chunk:MaxSize/binary, Rest/binary>> = Bin,
     {Chunk, Rest}.
 
--define(ZLIB_WINDOW_SIZE_BITS, 15).
+-define(ZLIB_WINDOW_SIZE_BITS, -15).
 deflate(Z, Data, RefData) ->
     zlib:deflateInit(Z, best_compression, deflated, ?ZLIB_WINDOW_SIZE_BITS, 9, default),
     zlib:deflateSetDictionary(Z, RefData),
