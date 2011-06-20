@@ -25,7 +25,7 @@
 -define(LIMIT_SO_DEFLATED_FITS_IN_64KB, 65000).
 
 -define(METHOD_UNCOMPRESSED, 0).
--define(METHOD_CHUNKED_DEFLATE, 2).
+-define(METHOD_CHUNKED, 2).
 
 -define(EXCLUDE_ZLIB_HEADERS, 1).
 
@@ -62,7 +62,7 @@ add(State, NewRev) ->
 	{ok, #dzstate{current_version = LastRev,
 		      current_pos = PrefixLength,
 		      zip_handle = Z}} ->
-	    NewTail = [envelope(pack_chunked_deflate(LastRev, NewRev, Z))
+	    NewTail = [envelope(pack_chunked(LastRev, NewRev, Z))
 		       | NewRevEnvelope],
 	    {PrefixLength, NewTail}
     end.
@@ -111,7 +111,7 @@ pack_multiple([], _Z) ->
 pack_multiple([Data], _Z) ->
     envelope(pack_uncompressed(Data));
 pack_multiple([Data | [NextData|_]=Rest], Z) ->
-    [envelope(pack_chunked_deflate(Data, NextData, Z))
+    [envelope(pack_chunked(Data, NextData, Z))
      | pack_multiple(Rest, Z)].
 
 %%%----------
@@ -142,8 +142,8 @@ unpack_entry(State, Method, Data) ->
 
 unpack_entry_to_iolist(_State, ?METHOD_UNCOMPRESSED, Data) ->
     unpack_uncompressed(Data);
-unpack_entry_to_iolist(State, ?METHOD_CHUNKED_DEFLATE, Data) ->
-    unpack_chunked_deflate(Data, State#dzstate.current_version, State#dzstate.zip_handle).
+unpack_entry_to_iolist(State, ?METHOD_CHUNKED, Data) ->
+    unpack_chunked(Data, State#dzstate.current_version, State#dzstate.zip_handle).
 
 %%%----- Method UNCOMPRESSED:
 
@@ -151,43 +151,43 @@ pack_uncompressed(Bin) -> {?METHOD_UNCOMPRESSED, Bin}.
 
 unpack_uncompressed(Bin) -> Bin.
 
-%%%----- Method CHUNKED_DEFLATE:
+%%%----- Method CHUNKED:
 -define(CHUNK_METHOD_DEFLATE, 0).
 -define(CHUNK_METHOD_PREFIX_COPY, 1).
 -define(CHUNK_METHOD_OFFSET_COPY, 2).
 
-unpack_chunked_deflate(<<>>, _RefData, _Z) ->
+unpack_chunked(<<>>, _RefData, _Z) ->
     <<>>;
-unpack_chunked_deflate(<<?CHUNK_METHOD_DEFLATE:5, RSkipSpec:3/unsigned,
+unpack_chunked(<<?CHUNK_METHOD_DEFLATE:5, RSkipSpec:3/unsigned,
 			CompSize:16/unsigned, CompData:CompSize/binary,
 			Rest/binary>>, RefData, Z) ->
     {RefChunk, RestRefData} = do_rskip(RSkipSpec, RefData),
     DataChunk = inflate(Z, CompData, RefChunk),
-    [DataChunk | unpack_chunked_deflate(Rest, RestRefData, Z)];
-unpack_chunked_deflate(<<?CHUNK_METHOD_PREFIX_COPY:5, 0:3,
+    [DataChunk | unpack_chunked(Rest, RestRefData, Z)];
+unpack_chunked(<<?CHUNK_METHOD_PREFIX_COPY:5, 0:3,
 			2:16/unsigned, CopyLenM1:16/unsigned,
 			Rest/binary>>, RefData, Z) ->
     CopyLen = CopyLenM1 + 1,
     {DataChunk, RestRefData} = erlang:split_binary(RefData, CopyLen),
-    [DataChunk | unpack_chunked_deflate(Rest, RestRefData, Z)];
-unpack_chunked_deflate(<<?CHUNK_METHOD_OFFSET_COPY:5, 0:3,
+    [DataChunk | unpack_chunked(Rest, RestRefData, Z)];
+unpack_chunked(<<?CHUNK_METHOD_OFFSET_COPY:5, 0:3,
 			4:16/unsigned, OffsetM1:16/unsigned, CopyLenM1:16/unsigned,
 			Rest/binary>>, RefData, Z) ->
     CopyLen = CopyLenM1 + 1,
     Offset = OffsetM1 + 1,
     {_, OffsetRefData} = erlang:split_binary(RefData, Offset),
     {DataChunk, RestRefData} = erlang:split_binary(OffsetRefData, CopyLen),
-    [DataChunk | unpack_chunked_deflate(Rest, RestRefData, Z)].
+    [DataChunk | unpack_chunked(Rest, RestRefData, Z)].
 
 -record(deflate_option, {rskip_spec, dsize}).
 -record(evaled_chunk_option, {ratio, chunk_method, comp_data, data_rest, ref_rest}).
 
-pack_chunked_deflate(Data, RefData, Z) ->
-    {?METHOD_CHUNKED_DEFLATE, pack_chunked_deflate2(Data, RefData, Z)}.
+pack_chunked(Data, RefData, Z) ->
+    {?METHOD_CHUNKED, pack_chunked2(Data, RefData, Z)}.
 
-pack_chunked_deflate2(<<>>, _RefData, _Z) ->
+pack_chunked2(<<>>, _RefData, _Z) ->
     <<>>;
-pack_chunked_deflate2(Data, RefData, Z) ->
+pack_chunked2(Data, RefData, Z) ->
     Options = gen_chunk_deflate_options(byte_size(Data), byte_size(RefData)),
     EvaledOptions0 = lists:map(fun(Opt) -> evaluate_deflate_option(Opt, Data, RefData, Z) end,
 			      Options),
@@ -202,7 +202,7 @@ pack_chunked_deflate2(Data, RefData, Z) ->
     (CompSize < 16#10000) orelse
 	error({internal_error, compressed_to_large, byte_size(CompData)}),
     [CM, <<CompSize:16/unsigned>>, CompData
-     | pack_chunked_deflate2(DataRest, RefRest, Z)].
+     | pack_chunked2(DataRest, RefRest, Z)].
     
 
 gen_chunk_deflate_options(DataSz, RefDataSz) ->
