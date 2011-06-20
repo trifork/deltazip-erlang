@@ -165,13 +165,13 @@ unpack_chunked_deflate(<<?CHUNK_METHOD_DEFLATE:5, RSkipSpec:3/unsigned,
     DataChunk = inflate(Z, CompData, RefChunk),
     [DataChunk | unpack_chunked_deflate(Rest, RestRefData, Z)];
 unpack_chunked_deflate(<<?CHUNK_METHOD_PREFIX_COPY:5, 0:3,
-			_CompSize:16/unsigned, CopyLenM1:16/unsigned,
+			2:16/unsigned, CopyLenM1:16/unsigned,
 			Rest/binary>>, RefData, Z) ->
     CopyLen = CopyLenM1 + 1,
     {DataChunk, RestRefData} = erlang:split_binary(RefData, CopyLen),
     [DataChunk | unpack_chunked_deflate(Rest, RestRefData, Z)];
 unpack_chunked_deflate(<<?CHUNK_METHOD_OFFSET_COPY:5, 0:3,
-			_CompSize:16/unsigned, OffsetM1:16/unsigned, CopyLenM1:16/unsigned,
+			4:16/unsigned, OffsetM1:16/unsigned, CopyLenM1:16/unsigned,
 			Rest/binary>>, RefData, Z) ->
     CopyLen = CopyLenM1 + 1,
     Offset = OffsetM1 + 1,
@@ -254,10 +254,10 @@ evaluate_prefix_option(Data, RefData) ->
 	       true -> infinity
 	    end,
     #evaled_chunk_option{ratio=Ratio,
-			   chunk_method= <<?CHUNK_METHOD_PREFIX_COPY:5, 0:3>>,
-			   comp_data=CompData,
-			   data_rest=DataRest,
-			   ref_rest=RestRefData}.
+			 chunk_method= <<?CHUNK_METHOD_PREFIX_COPY:5, 0:3>>,
+			 comp_data=CompData,
+			 data_rest=DataRest,
+			 ref_rest=RestRefData}.
 
 evaluate_offset_copy_option(Data, RefData) ->
     SuffixLen = binary:longest_common_suffix([Data, RefData]),
@@ -276,10 +276,10 @@ evaluate_offset_copy_option(Data, RefData) ->
 
 	    Ratio = (byte_size(CompData) + 0) / Len,
        #evaled_chunk_option{ratio=Ratio,
-			      chunk_method= <<?CHUNK_METHOD_OFFSET_COPY:5, 0:3>>,
-			      comp_data=CompData,
-			      data_rest=DataRest,
-			      ref_rest=RestRefData};
+			    chunk_method= <<?CHUNK_METHOD_OFFSET_COPY:5, 0:3>>,
+			    comp_data=CompData,
+			    data_rest=DataRest,
+			    ref_rest=RestRefData};
        true ->
 	    #evaled_chunk_option{ratio=infinity}
     end.
