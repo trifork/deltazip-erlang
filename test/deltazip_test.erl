@@ -98,6 +98,24 @@ random_patch_batch_test_() ->
 	     test_batches(Batches, [], <<>>)
      end}.
 
+random_variation_test_() ->
+    {timeout, 300,
+     fun() ->
+	     {A,B,C} = now(), random:seed(A,B,C),
+	     Revs = random_variations(200),
+	     test_random(Revs, [], <<>>)
+     end}.
+
+random_variation_batch_test_() ->
+    {timeout, 300,
+     fun() ->
+	     {A,B,C} = now(), random:seed(A,B,C),
+	     Batches = batch_randomly(random_variations(200)),
+	     test_batches(Batches, [], <<>>)
+     end}.
+
+%%%--------------------
+
 batch_randomly([]) -> [];
 batch_randomly(L) ->
     Len = length(L),
@@ -153,13 +171,20 @@ verify_history(DZ, OldRevs) ->
     end.
 
 random_patches(N) ->
-    {Rnds, _Acc} =
+    series(N, rnd_binary(), fun rnd_patch_binary/1).
+
+random_variations(N) ->
+    series(N, rnd_binary(), fun random_variation/1).
+
+series(N, Start, Fun) ->
+    {Revs, _Acc} =
 	lists:mapfoldl(fun(_, Bin) ->
-			       {Bin, rnd_patch_binary(Bin)}
+			       {Bin, Fun(Bin)}
 		       end,
-		       rnd_binary(),
+		       Start,
 		       lists:seq(1,N)),
-    Rnds.
+    Revs.
+    
 
 rnd_binary() ->
     Len = random:uniform(100000)-1,
@@ -191,7 +216,34 @@ rnd_patch_binary_iol(OrgBin) ->
        true -> []
     end.
 	     
+%%%--------------------
+random_variation(Bin) ->
+    Spec = variation_spec(byte_size(Bin)),
+    iolist_to_binary(apply_variation_spec(Spec, Bin)).
 
+variation_spec(Size) ->
+    C = random:uniform(7),
+    if 0<C, C=<2 -> same;
+       2<C, C=<3 -> drop;
+       3<C, C=<4 -> {replace, rnd_binary(2*Size + 100)};
+       4<C, C=<7 ->
+	    PreLen = random:uniform(Size+1)-1,
+	    SufLen = random:uniform(Size+1)-1,
+	    {split,
+	     PreLen, variation_spec(PreLen),
+	     SufLen, variation_spec(SufLen)}
+    end.
+
+apply_variation_spec(same, Bin) -> Bin;
+apply_variation_spec(drop, _Bin) -> <<>>;
+apply_variation_spec({replace, NewBin}, _Bin) -> NewBin;
+apply_variation_spec({split, PreLen, PreSpec, SufLen, SufSpec}, Bin) ->
+    <<Prefix:PreLen/binary, _/binary>> = Bin,
+    NonSufLen =  byte_size(Bin) - SufLen,
+    <<_:NonSufLen/binary, Suffix:SufLen/binary>> = Bin,
+    [apply_variation_spec(PreSpec, Prefix) |
+     apply_variation_spec(SufSpec, Suffix)].
+    
 %%%--------------------
 
 access(Bin) ->
