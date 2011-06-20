@@ -152,17 +152,35 @@ pack_uncompressed(Bin) -> {?METHOD_UNCOMPRESSED, Bin}.
 unpack_uncompressed(Bin) -> Bin.
 
 %%%----- Method CHUNKED_DEFLATE:
+-define(CHUNK_METHOD_DEFLATE, 0).
+-define(CHUNK_METHOD_PREFIX_COPY, 1).
+-define(CHUNK_METHOD_OFFSET_COPY, 2).
 
 unpack_chunked_deflate(<<>>, _RefData, _Z) ->
     <<>>;
-unpack_chunked_deflate(<<ChunkMethod:8, CompSize:16/unsigned, CompData:CompSize/binary, Rest/binary>>, RefData, Z) ->
-    <<0:5, RSkipSpec:3/unsigned>> = <<ChunkMethod:8>>,
+unpack_chunked_deflate(<<?CHUNK_METHOD_DEFLATE:5, RSkipSpec:3/unsigned,
+			CompSize:16/unsigned, CompData:CompSize/binary,
+			Rest/binary>>, RefData, Z) ->
     {RefChunk, RestRefData} = do_rskip(RSkipSpec, RefData),
     DataChunk = inflate(Z, CompData, RefChunk),
+    [DataChunk | unpack_chunked_deflate(Rest, RestRefData, Z)];
+unpack_chunked_deflate(<<?CHUNK_METHOD_PREFIX_COPY:5, 0:3,
+			_CompSize:16/unsigned, CopyLenM1:16/unsigned,
+			Rest/binary>>, RefData, Z) ->
+    CopyLen = CopyLenM1 + 1,
+    {DataChunk, RestRefData} = erlang:split_binary(RefData, CopyLen),
+    [DataChunk | unpack_chunked_deflate(Rest, RestRefData, Z)];
+unpack_chunked_deflate(<<?CHUNK_METHOD_OFFSET_COPY:5, 0:3,
+			_CompSize:16/unsigned, OffsetM1:16/unsigned, CopyLenM1:16/unsigned,
+			Rest/binary>>, RefData, Z) ->
+    CopyLen = CopyLenM1 + 1,
+    Offset = OffsetM1 + 1,
+    {_, OffsetRefData} = erlang:split_binary(RefData, Offset),
+    {DataChunk, RestRefData} = erlang:split_binary(OffsetRefData, CopyLen),
     [DataChunk | unpack_chunked_deflate(Rest, RestRefData, Z)].
 
 -record(deflate_option, {rskip_spec, dsize}).
--record(evaled_deflate_option, {ratio, chunk_method, comp_data, data_rest, ref_rest}).
+-record(evaled_chunk_option, {ratio, chunk_method, comp_data, data_rest, ref_rest}).
 
 pack_chunked_deflate(Data, RefData, Z) ->
     {?METHOD_CHUNKED_DEFLATE, pack_chunked_deflate2(Data, RefData, Z)}.
@@ -171,11 +189,14 @@ pack_chunked_deflate2(<<>>, _RefData, _Z) ->
     <<>>;
 pack_chunked_deflate2(Data, RefData, Z) ->
     Options = gen_chunk_deflate_options(byte_size(Data), byte_size(RefData)),
-    EvaledOptions = lists:map(fun(Opt) -> evaluate_deflate_option(Opt, Data, RefData, Z) end,
+    EvaledOptions0 = lists:map(fun(Opt) -> evaluate_deflate_option(Opt, Data, RefData, Z) end,
 			      Options),
-    SortedOptions = lists:keysort(#evaled_deflate_option.ratio, EvaledOptions),
+    EvaledOptions = [evaluate_prefix_option(Data, RefData),
+		     evaluate_offset_copy_option(Data, RefData)
+		     | EvaledOptions0],
+    SortedOptions = lists:keysort(#evaled_chunk_option.ratio, EvaledOptions),
     BestOption = hd(SortedOptions),
-    #evaled_deflate_option{chunk_method=CM, comp_data=CompData, data_rest=DataRest, ref_rest=RefRest} = BestOption,
+    #evaled_chunk_option{chunk_method=CM, comp_data=CompData, data_rest=DataRest, ref_rest=RefRest} = BestOption,
     
     CompSize = byte_size(CompData),
     (CompSize < 16#10000) orelse
@@ -215,11 +236,54 @@ evaluate_deflate_option(#deflate_option{rskip_spec = RSkipSpec, dsize = DSize}, 
     CompData = deflate(Z, DataChunk, RefChunk),
     Ratio = (byte_size(CompData) + ?OVERHEAD_PENALTY_BYTES) / byte_size(DataChunk),
 
-    #evaled_deflate_option{ratio=Ratio,
-			   chunk_method= <<0:5, RSkipSpec:3>>,
+    #evaled_chunk_option{ratio=Ratio,
+			   chunk_method= <<?CHUNK_METHOD_DEFLATE:5, RSkipSpec:3>>,
 			   comp_data=CompData,
 			   data_rest=DataRest,
 			   ref_rest=RestRefData}.
+
+evaluate_prefix_option(Data, RefData) ->
+    {Data2, _} = take_chunk(65536, Data),	% Limit common prefix to 64KB.
+    PrefixLen = binary:longest_common_prefix([Data2, RefData]),
+
+    {_Prefix,DataRest} = erlang:split_binary(Data, PrefixLen),
+    {_,RestRefData} = erlang:split_binary(RefData, PrefixLen),
+    CompData = <<(PrefixLen-1):16/unsigned>>,
+
+    Ratio = if PrefixLen > 0 -> (byte_size(CompData) + ?OVERHEAD_PENALTY_BYTES) / PrefixLen;
+	       true -> infinity
+	    end,
+    #evaled_chunk_option{ratio=Ratio,
+			   chunk_method= <<?CHUNK_METHOD_PREFIX_COPY:5, 0:3>>,
+			   comp_data=CompData,
+			   data_rest=DataRest,
+			   ref_rest=RestRefData}.
+
+evaluate_offset_copy_option(Data, RefData) ->
+    SuffixLen = binary:longest_common_suffix([Data, RefData]),
+    DataSz    = byte_size(Data),
+    RefDataSz = byte_size(RefData),
+    Offset = RefDataSz - DataSz,
+    if SuffixLen == DataSz, % All of Data is a suffix of RefData.
+       SuffixLen > 0,
+       Offset > 0,
+       Offset =< 65536 ->
+	    Len = min(65536, SuffixLen),
+	    {_Prefix,DataRest} = erlang:split_binary(Data, Len),
+	    {_,RestRefData} = erlang:split_binary(RefData, Offset + Len),
+	    
+	    CompData = <<(Offset-1):16/unsigned, (Len-1):16/unsigned>>,
+
+	    Ratio = (byte_size(CompData) + 0) / Len,
+       #evaled_chunk_option{ratio=Ratio,
+			      chunk_method= <<?CHUNK_METHOD_OFFSET_COPY:5, 0:3>>,
+			      comp_data=CompData,
+			      data_rest=DataRest,
+			      ref_rest=RestRefData};
+       true ->
+	    #evaled_chunk_option{ratio=infinity}
+    end.
+
 
 do_rskip(RSkipSpec, RefData) ->
     RSkip = spec_to_rskip(RSkipSpec),
