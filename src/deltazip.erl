@@ -26,6 +26,7 @@
 
 -define(METHOD_UNCOMPRESSED, 0).
 -define(METHOD_CHUNKED, 2).
+-define(METHOD_DITTOFLATE, 3).
 
 -define(EXCLUDE_ZLIB_HEADERS, 1).
 
@@ -62,7 +63,7 @@ add(State, NewRev) ->
 	{ok, #dzstate{current_version = LastRev,
 		      current_pos = PrefixLength,
 		      zip_handle = Z}} ->
-	    NewTail = [envelope(pack_chunked(LastRev, NewRev, Z))
+	    NewTail = [envelope(select_method_and_pack_delta(LastRev, NewRev, Z))
 		       | NewRevEnvelope],
 	    {PrefixLength, NewTail}
     end.
@@ -111,7 +112,7 @@ pack_multiple([], _Z) ->
 pack_multiple([Data], _Z) ->
     envelope(pack_uncompressed(Data));
 pack_multiple([Data | [NextData|_]=Rest], Z) ->
-    [envelope(pack_chunked(Data, NextData, Z))
+    [envelope(select_method_and_pack_delta(Data, NextData, Z))
      | pack_multiple(Rest, Z)].
 
 %%%----------
@@ -145,11 +146,45 @@ unpack_entry_to_iolist(_State, ?METHOD_UNCOMPRESSED, Data) ->
 unpack_entry_to_iolist(State, ?METHOD_CHUNKED, Data) ->
     unpack_chunked(Data, State#dzstate.current_version, State#dzstate.zip_handle).
 
+select_method_and_pack_delta(Data, RefData, Z) ->
+    AllowDitto = erlang:get(allow_dittoflate) /= undefined,
+    ForceDitto = erlang:get(force_dittoflate) /= undefined,
+    if ForceDitto ->
+	    pack_dittoflate(Data, RefData, Z);
+       not AllowDitto ->
+	    pack_chunked(Data, RefData, Z);
+       true ->
+	    TS0 = now(),
+	    PackCh = {_,BinCh} = pack_chunked(Data, RefData, Z),
+	    TS1 = now(),
+	    PackDt = {_,BinDt} = pack_dittoflate(Data, RefData, Z),
+	    TS2 = now(),
+
+	    SizeCh = iolist_size(BinCh),
+	    SizeDt = iolist_size(BinDt),
+	    io:format("Stats: ~6b ~6b | ~6b ~6b // |Size Time|\n",
+		      [SizeCh, timer:now_diff(TS1,TS0),
+		       SizeDt, timer:now_diff(TS2,TS1)]),
+	    if SizeDt < SizeCh ->
+		    PackDt;
+	       true ->
+		    PackCh
+	    end
+    end.
+    
+
 %%%----- Method UNCOMPRESSED:
 
 pack_uncompressed(Bin) -> {?METHOD_UNCOMPRESSED, Bin}.
 
 unpack_uncompressed(Bin) -> Bin.
+
+%%%----- Method DITTOFLATE:
+pack_dittoflate(Data, RefData, Z) ->
+    {Part1,Part2} = dittoflate:compress(Z, Data, RefData),
+    Part2P = dittoflate:pad(Part2),
+    CompData = <<(byte_size(Part1)):32/unsigned, Part1/binary, Part2P/binary>>,
+    {?METHOD_DITTOFLATE, CompData}.
 
 %%%----- Method CHUNKED:
 -define(CHUNK_METHOD_DEFLATE, 0).
@@ -224,7 +259,7 @@ gen_chunk_deflate_options(DataSz, RefDataSz) ->
 		     end
 		 end].
 
-spec_to_dsize(DSizeSpec) -> (1+DSizeSpec) * (?CHUNK_SIZE div 2).
+spec_to_dsize(DSizeSpec) -> (2+DSizeSpec) * (?CHUNK_SIZE div 2).
 
 spec_to_rskip(RSkipSpec) -> RSkipSpec * (?CHUNK_SIZE div 2).
 
