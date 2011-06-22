@@ -28,8 +28,9 @@
 -define(METHOD_UNCOMPRESSED, 0).
 -define(METHOD_CHUNKED, 2).
 -define(METHOD_DITTOFLATE, 3).
+-define(METHOD_CHUNKED_MIDDLE, 4).
 
--define(EXCLUDE_ZLIB_HEADERS, 1).
+-define(EXCLUDE_ZLIB_HEADERS, dummy).
 
 %%%-------------------- API --------------------
 
@@ -148,34 +149,27 @@ unpack_entry(State, Method, Data) ->
 unpack_entry_to_iolist(_State, ?METHOD_UNCOMPRESSED, Data) ->
     unpack_uncompressed(Data);
 unpack_entry_to_iolist(State, ?METHOD_CHUNKED, Data) ->
-    unpack_chunked(Data, State#dzstate.current_version, State#dzstate.zip_handle).
+    unpack_chunked(Data, State#dzstate.current_version, State#dzstate.zip_handle);
+unpack_entry_to_iolist(State, ?METHOD_CHUNKED_MIDDLE, Data) ->
+    unpack_chunked_middle(Data, State#dzstate.current_version, State#dzstate.zip_handle).
 
 select_method_and_pack_delta(Data, RefData, Z) ->
     AllowDitto = erlang:get(allow_dittoflate) /= undefined,
     ForceDitto = erlang:get(force_dittoflate) /= undefined,
-    if ForceDitto ->
-	    pack_dittoflate(Data, RefData, Z);
-       not AllowDitto ->
-	    pack_chunked(Data, RefData, Z);
-       true ->
-	    TS0 = now(),
-	    PackCh = {_,BinCh} = pack_chunked(Data, RefData, Z),
-	    TS1 = now(),
-	    PackDt = {_,BinDt} = pack_dittoflate(Data, RefData, Z),
-	    TS2 = now(),
-
-	    SizeCh = iolist_size(BinCh),
-	    SizeDt = iolist_size(BinDt),
-	    io:format("Stats: ~6b ~6b | ~6b ~6b // |Size Time|\n",
-		      [SizeCh, timer:now_diff(TS1,TS0),
-		       SizeDt, timer:now_diff(TS2,TS1)]),
-	    if SizeDt < SizeCh ->
-		    PackDt;
-	       true ->
-		    PackCh
-	    end
-    end.
-    
+    Methods = if ForceDitto ->
+		      [fun pack_dittoflate/3];
+		 true ->
+		      [%fun pack_chunked/3,
+		       fun pack_chunked_middle/3]
+			  ++
+			  [fun pack_dittoflate/3 || AllowDitto]
+	      end,
+    Packs = [begin P={_,Bin}=Method(Data, RefData, Z),
+		   
+		   {iolist_size(Bin), P}
+	     end || Method <- Methods],
+    {_,BestPack} = hd(lists:keysort(1,Packs)),
+    BestPack.
 
 %%%----- Method UNCOMPRESSED:
 
@@ -240,6 +234,7 @@ pack_chunked2(Data, RefData, Z) ->
     CompSize = byte_size(CompData),
     (CompSize < 16#10000) orelse
 	error({internal_error, compressed_to_large, byte_size(CompData)}),
+%%     io:format("DB| chunk: method=~p size=~p\n", [CM, CompSize]),
     [CM, <<CompSize:16/unsigned>>, CompData
      | pack_chunked2(DataRest, RefRest, Z)].
     
@@ -267,13 +262,14 @@ spec_to_dsize(DSizeSpec) -> (2+DSizeSpec) * (?CHUNK_SIZE div 2).
 
 spec_to_rskip(RSkipSpec) -> RSkipSpec * (?CHUNK_SIZE div 2).
 
--define(OVERHEAD_PENALTY_BYTES, 30).
+-define(DEFLATE_OVERHEAD_PENALTY_BYTES, 30).
+-define(COPY_OVERHEAD_PENALTY_BYTES, 3).
 evaluate_deflate_option(#deflate_option{rskip_spec = RSkipSpec, dsize = DSize}, Data, RefData, Z) ->
     {DataChunk, DataRest} = take_chunk(DSize, Data),
     {RefChunk, RestRefData} = do_rskip(RSkipSpec, RefData),
 
     CompData = deflate(Z, DataChunk, RefChunk),
-    Ratio = (byte_size(CompData) + ?OVERHEAD_PENALTY_BYTES) / byte_size(DataChunk),
+    Ratio = (byte_size(CompData) + ?DEFLATE_OVERHEAD_PENALTY_BYTES) / byte_size(DataChunk),
 
     #evaled_chunk_option{ratio=Ratio,
 			   chunk_method= <<?CHUNK_METHOD_DEFLATE:5, RSkipSpec:3>>,
@@ -289,7 +285,7 @@ evaluate_prefix_option(Data, RefData) ->
     {_,RestRefData} = erlang:split_binary(RefData, PrefixLen),
     CompData = <<(PrefixLen-1):16/unsigned>>,
 
-    Ratio = if PrefixLen > 0 -> (byte_size(CompData) + ?OVERHEAD_PENALTY_BYTES) / PrefixLen;
+    Ratio = if PrefixLen > 0 -> (byte_size(CompData) + ?COPY_OVERHEAD_PENALTY_BYTES) / PrefixLen;
 	       true -> infinity
 	    end,
     #evaled_chunk_option{ratio=Ratio,
@@ -329,6 +325,34 @@ do_rskip(RSkipSpec, RefData) ->
     {_, RestRefData} = take_chunk(RSkip, RefData),
     {RefChunk, _} = take_chunk(?WINDOW_SIZE, RestRefData),
     {RefChunk, RestRefData}.    
+
+%%%----- Method CHUNKED_MIDDLE:
+pack_chunked_middle(Data, RefData, Z) ->
+%%     DataLen = byte_size(Data),
+%%     RefLen  = byte_size(RefData),
+
+    %% Calculate and remove prefix:
+    PrefixLen = binary:longest_common_prefix([Data, RefData]),
+    <<_:PrefixLen/binary, DataSansPrefix/binary>> = Data,
+    <<_:PrefixLen/binary, RefSansPrefix/binary >> = RefData,
+
+    %% Calculate and remove suffix:
+    SuffixLen = binary:longest_common_suffix([DataSansPrefix, RefSansPrefix]),
+    DataMidLen = byte_size(DataSansPrefix) - SuffixLen,
+    RefMidLen  = byte_size(RefSansPrefix)  - SuffixLen,
+    <<DataMiddle:DataMidLen/binary, _:SuffixLen/binary>> = DataSansPrefix,
+    <<RefMiddle:RefMidLen/binary,   _:SuffixLen/binary>> = RefSansPrefix,
+    
+    CompMiddle = pack_chunked2(DataMiddle, RefMiddle, Z),
+    {?METHOD_CHUNKED_MIDDLE,
+     [<<PrefixLen:32/unsigned, SuffixLen:32/unsigned>>, CompMiddle]}.
+
+unpack_chunked_middle(CompData, RefData, Z) ->
+    <<PrefixLen:32/unsigned, SuffixLen:32/unsigned, CompMiddle/binary>> = CompData,
+    RefMidLen  = byte_size(RefData) - PrefixLen - SuffixLen,
+    <<Prefix:PrefixLen/binary, RefMiddle:RefMidLen/binary, Suffix:SuffixLen/binary>> = RefData,
+    [Prefix, unpack_chunked(CompMiddle, RefMiddle, Z), Suffix].
+
 
 %%%-------------------- Utility -------------------
 
