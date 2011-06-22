@@ -20,21 +20,21 @@ compress(Z, Data, RefData) ->
 spec_to_streams([], Instrs, Args) -> {Instrs, Args};
 spec_to_streams([{comment,_} | Rest], Instrs, Args) ->
     spec_to_streams(Rest, Instrs, Args);
-spec_to_streams([{lit,X} | Rest], Instrs, Args) ->
-    spec_to_streams(Rest, <<Instrs/binary, 0, X>>, Args);
-%% spec_to_streams([{lit,X} | Rest]=L, Instrs, Args) ->
-%%     {Lits, Rest2} = collect_literals(L),
-%%     Count = length(Lits),
-%% %%     io:format("DB| LitCount=~p\n", [Count]),
-%%     if Count>=3 ->
-%% 	    LitsBin = list_to_binary(Lits),
-%% 	    {Code1, NCntBits, CntBits} = length_to_code(Count),
-%% 	    spec_to_streams(Rest2,
-%% 			    <<Instrs/binary, 4, Code1, LitsBin/binary>>,
-%% 			    <<Args/bitstring, CntBits:NCntBits>>);
-%%        true ->
-%% 	    spec_to_streams(Rest, <<Instrs/binary, 0, X>>, Args)
-%%     end;
+%% spec_to_streams([{lit,X} | Rest], Instrs, Args) ->
+%%     spec_to_streams(Rest, <<Instrs/binary, 0, X>>, Args);
+spec_to_streams([{lit,X} | Rest]=L, Instrs, Args) ->
+    {Lits, Rest2} = collect_literals(L),
+    Count = length(Lits),
+%%     io:format("DB| LitCount=~p\n", [Count]),
+    if Count>=3 ->
+	    LitsBin = list_to_binary(Lits),
+	    {Code1, NCntBits, CntBits} = length_to_code(Count),
+	    spec_to_streams(Rest2,
+			    <<Instrs/binary, 4, Code1, LitsBin/binary>>,
+			    <<Args/bitstring, CntBits:NCntBits>>);
+       true ->
+	    spec_to_streams(Rest, <<Instrs/binary, 0, X>>, Args)
+    end;
 spec_to_streams([{W,Len,Off} | Rest], Instrs, Args) ->
     CodeBase = case W of
 		   past -> DBase=1, 1;
@@ -48,8 +48,14 @@ spec_to_streams([{W,Len,Off} | Rest], Instrs, Args) ->
     
 
 collect_literals(L) ->
-    {Lits,Rest} = lists:splitwith(fun(X) -> element(1,X)==lit end, L),
-    {lists:map(fun({lit,X})->X end, Lits), Rest}.
+    {Lits,Rest} = lists:splitwith(fun(X) ->
+					  Elm=element(1,X),
+					  Elm==lit orelse Elm==comment
+				  end, L),
+    {lists:flatmap(fun({lit,X})->[X];
+		      ({comment,_})->[] end,
+		   Lits),
+     Rest}.
 
 %% From RFC 1951 (deflate):
 -define(LENGTH_TO_CODE_SPEC,
@@ -98,8 +104,15 @@ compress_to_spec(Data, PastWindow, FwdWindow, DiscardWindow) ->
 	    OrgSkip = none;
 	{w1, Len, Off0} ->
 	    Off = byte_size(PastWindow)-Off0,
-	    Item = {past, Len, Off},
-	    EatAmount = Len,
+	    if Off==Len -> % Past up until now
+		    {_,Data2} = eat(Data,Len),
+		    FutureToo = binary:longest_common_prefix([Data, Data2]);
+	       true ->
+		    FutureToo = 0
+	    end,
+	    TotalLen = Len + FutureToo,
+	    Item = {past, TotalLen, Off},
+	    EatAmount = TotalLen,
 	    OrgSkip = none;
 	{w2, Len, Off} ->
 	    Item = {original, Len, Off},
@@ -142,17 +155,22 @@ append_to_window(Window, Extra, WSize) ->
     
 
 find_in_windows(Data, PastWindow, FwdWindow, DiscardWindow) ->
-    M1 = {M1Len,_} = find_last_longest_match(Data, PastWindow),
-    M2 = {M2Len,M2Off} = find_first_longest_match(Data, FwdWindow),
-    M3 = {M3Len,_} = find_last_longest_match(Data, DiscardWindow),
-    M2Len2 = M2Len - (M2Off div 100), % Punish early skipping.
-%%     io:format("Search results: ~p ~p ~p\n", [M1, M2, M3]),
-    {_, {BestLen, BestOffset}, WinID} = _BestMatch =
-	lists:last(lists:sort([{M1Len,  M1, w1},
-			       {M2Len2, M2, w2},
-			       {M3Len,  M3, w3}])),
-    if BestLen < 1 -> no_match;
-       true -> {WinID, BestLen, BestOffset}
+    case binary:longest_common_prefix([Data, FwdWindow]) of
+	CopyLen when CopyLen >= 3 ->
+	    {w2, CopyLen, 0};
+	_ ->
+	    M1 = {M1Len,_} = find_last_longest_match(Data, PastWindow),
+	    M2 = {M2Len,M2Off} = find_first_longest_match(Data, FwdWindow),
+	    M3 = {M3Len,_} = find_last_longest_match(Data, DiscardWindow),
+	    M2Len2 = M2Len - (M2Off div 100), % Punish early skipping.
+	    %%     io:format("Search results: ~p ~p ~p\n", [M1, M2, M3]),
+	    {_, {BestLen, BestOffset}, WinID} = _BestMatch =
+		lists:last(lists:sort([{M1Len,  M1, w1},
+				       {M2Len2, M2, w2},
+				       {M3Len,  M3, w3}])),
+	    if BestLen < 1 -> no_match;
+	       true -> {WinID, BestLen, BestOffset}
+	    end
     end.
 
 find_first_longest_match(Data, Window) ->
