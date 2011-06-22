@@ -2,6 +2,7 @@
 -compile(export_all).
 
 -export([open/1, get/1, previous/1, add/2, add_multiple/2, close/1]).
+-export([stats_for_current_entry/1]).
 
 -record(dzstate, {get_size_fun :: fun(() -> integer()),
 		  pread_fun    :: fun((integer(),integer()) -> {ok, binary()} | {error,_}),
@@ -48,6 +49,9 @@ open(_Access={GetSizeFun, PReadFun}) when is_function(GetSizeFun,0),
 get(#dzstate{current_version=Bin}) ->
 %%     io:format("DB| get @ ~p: ~p\n", [S#dzstate.current_pos, Bin]), 
     Bin.
+
+stats_for_current_entry(#dzstate{current_method=M, current_size=Sz}) ->
+    {M, Sz}.
 
 -spec(previous/1 :: (#dzstate{}) -> {ok, #dzstate{}} | {error, at_beginning}).
 previous(#dzstate{current_pos=0}) ->

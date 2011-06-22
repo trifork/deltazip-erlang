@@ -4,7 +4,10 @@
 
 main(L) ->
     put(exit_code, 0),
+    Before = now(),
     interpret_command(L),
+    After = now(),
+    io:format(standard_error, "(Duration: ~.3fs)\n", [timer:now_diff(After, Before) * 1.0e-6]),
     init:stop(get(exit_code)).
 
 interpret_command(["create", DZFile | InputFiles]) ->
@@ -14,7 +17,10 @@ interpret_command(["get", DZFile]) ->
 interpret_command(["get", "@" ++ NrStr, DZFile]) ->
     do_get(DZFile, list_to_integer(NrStr));
 interpret_command(["count", DZFile]) ->
-    do_count(DZFile).
+    do_count(DZFile);
+interpret_command(["sizes", DZFile]) ->
+    do_sizes(DZFile).
+
 %%%======================================================================
 
 %%%----------
@@ -77,6 +83,31 @@ count_entries(DZ, Acc) ->
     case deltazip:previous(DZ) of
 	{ok, DZ2} -> count_entries(DZ2, Acc+1);
 	{error, at_beginning} -> Acc
+    end.
+
+%%%----------
+do_sizes(DZFile) ->
+    {ok, Fd} = file:open(DZFile, [read, binary]),
+    Access = fd_access(Fd),
+    DZ = deltazip:open(Access),
+    print_entry_stats(DZ),
+    deltazip:close(DZ),
+    ok = file:close(Fd).
+
+print_entry_stats(DZ) ->
+    io:format("~s:\t~s\t~s\t~s\n", ["Nr", "Method", "CompSize", "VersionSize"]),
+    case deltazip:get(DZ) of
+	file_is_empty -> 0;
+	_ -> print_entry_stats(DZ, 0)
+    end.
+    
+print_entry_stats(DZ, Nr) ->
+    {Method,CompSize} = deltazip:stats_for_current_entry(DZ),
+    UncompSize = byte_size(deltazip:get(DZ)),
+    io:format("~b:\t~2b\t~8b\t~8b\n", [-Nr, Method, CompSize, UncompSize]),
+    case deltazip:previous(DZ) of
+	{ok, DZ2} -> print_entry_stats(DZ2, Nr+1);
+	{error, at_beginning} -> ok
     end.
 
 %%%======================================================================
