@@ -16,6 +16,10 @@ compress(Z, Data, RefData) ->
     Args   = iolist_to_binary(Args0),
     {deflate(Z,Instrs), Args}.
 
+-define(CODE_BASE_PAST,     (0*32)).
+-define(CODE_BASE_ORIGINAL, (1*32)).
+-define(CODE_BASE_DISCARDS, (2*32)).
+-define(CODE_BASE_LITERAL,  (3*32)).
 
 spec_to_streams([], Instrs, Args) -> {Instrs, Args};
 spec_to_streams([{comment,_} | Rest], Instrs, Args) ->
@@ -30,21 +34,20 @@ spec_to_streams([{lit,X} | Rest]=L, Instrs, Args) ->
 	    LitsBin = list_to_binary(Lits),
 	    {Code1, NCntBits, CntBits} = length_to_code(Count),
 	    spec_to_streams(Rest2,
-			    <<Instrs/binary, 4, Code1, LitsBin/binary>>,
+			    <<Instrs/binary, (?CODE_BASE_LITERAL+Code1), LitsBin/binary>>,
 			    <<Args/bitstring, CntBits:NCntBits>>);
        true ->
 	    spec_to_streams(Rest, <<Instrs/binary, 0, X>>, Args)
     end;
 spec_to_streams([{W,Len,Off} | Rest], Instrs, Args) ->
     CodeBase = case W of
-		   past -> DBase=1, 1;
-		   original -> DBase=0, 2;
-		   discards -> DBase=0, 3
+		   past     -> DBase=1, ?CODE_BASE_PAST;
+		   original -> DBase=0, ?CODE_BASE_ORIGINAL;
+		   discards -> DBase=0, ?CODE_BASE_DISCARDS
 	       end,
     {Code1, NLenBits, LenBits} = length_to_code(Len),
     {Code2, NOffBits, OffBits} = distance_to_code(Off-DBase+1),
-%%     Code = CodeBase + CodeOff,
-    spec_to_streams(Rest, <<Instrs/binary, CodeBase, Code1, Code2>>, <<Args/bitstring, LenBits:NLenBits, OffBits:NOffBits>>).
+    spec_to_streams(Rest, <<Instrs/binary, (CodeBase+Code1), Code2>>, <<Args/bitstring, LenBits:NLenBits, OffBits:NOffBits>>).
     
 
 collect_literals(L) ->
