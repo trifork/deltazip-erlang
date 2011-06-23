@@ -62,6 +62,15 @@ two_revs_test() ->
     deltazip:close(DZc2).
     
 
+header_check_test() ->
+    Bin1 = <<"DATA">>,
+    Bin2 = <<"123">>,
+    {'EXIT', {not_a_deltazip_file, _}} =
+	(catch {ok, deltazip:open(access(Bin1))}),
+    {'EXIT', {not_a_deltazip_file, _}} =
+	(catch {ok, deltazip:open(access(Bin2))}),
+    ok.
+
 random_test_() ->
     {timeout, 90,
      fun() ->
