@@ -7,13 +7,18 @@
 -record(dzstate, {get_size_fun :: fun(() -> integer()),
 		  pread_fun    :: fun((integer(),integer()) -> {ok, binary()} | {error,_}),
 		  zip_handle,
+		  file_header_state :: empty | valid,
 		  current_pos :: integer(),
 		  current_size :: integer(),
 		  current_method :: integer(),
 		  current_version :: binary() | file_is_empty
 		 }).
 
-%% For some reason, zlib can only use 32K-262 bytes (=#7EFA) of a dictionary.
+-define(DELTAZIP_MAGIC_HEADER, <<16#CEB47A10:32/big>>). 
+-define(FILE_HEADER_LENGTH, 4). 
+
+%% For some reason, zlib can only use 32K-262 bytes (=#7EFA) of a dictionary
+%% when compressing.
 %% (See http://www.zlib.net/manual.html)
 %% So we use a slightly smaller window size:
 -define(WINDOW_SIZE, 16#7E00).
@@ -40,11 +45,12 @@ open(_Access={GetSizeFun, PReadFun}) when is_function(GetSizeFun,0),
     State = #dzstate{get_size_fun= GetSizeFun,
 		     pread_fun   = PReadFun,
 		     zip_handle  = Z},
-    case previous(TmpState = set_initial_position(State)) of
-	{ok, State2} ->
-	    State2;
+    State2 = set_initial_position(check_magic_header(State)),
+    case previous(State2) of
+	{ok, State3} ->
+	    State3;
 	{error, at_beginning} ->
-	    TmpState#dzstate{current_version = file_is_empty}
+	    State2#dzstate{current_version = file_is_empty}
     end.
 
 get(#dzstate{current_version=Bin}) ->
@@ -55,25 +61,18 @@ stats_for_current_entry(#dzstate{current_method=M, current_size=Sz}) ->
     {M, Sz}.
 
 -spec(previous/1 :: (#dzstate{}) -> {ok, #dzstate{}} | {error, at_beginning}).
-previous(#dzstate{current_pos=0}) ->
+previous(#dzstate{current_pos=CP}) when CP =< ?FILE_HEADER_LENGTH ->
     {error, at_beginning};
 previous(State) ->
     {ok, compute_current_version(goto_previous_position(State))}.
 
 add(State, NewRev) ->
-    NewRevEnvelope = envelope(pack_uncompressed(NewRev)),
-    case previous(set_initial_position(State)) of
-	{error, at_beginning} ->
-	    {0, NewRevEnvelope};
-	{ok, #dzstate{current_version = LastRev,
-		      current_pos = PrefixLength,
-		      zip_handle = Z}} ->
-	    NewTail = [envelope(select_method_and_pack_delta(LastRev, NewRev, Z))
-		       | NewRevEnvelope],
-	    {PrefixLength, NewTail}
-    end.
+    add_multiple(State, [NewRev]).
 
 add_multiple(State, NewRevs) ->
+    opt_prepend_file_header_to_append_spec(State, add_multiple2(State, NewRevs)).
+
+add_multiple2(State, NewRevs) ->
     case previous(set_initial_position(State)) of
 	{error, at_beginning} ->
 	    Z = State#dzstate.zip_handle,
@@ -89,6 +88,29 @@ close(#dzstate{zip_handle=Z}) ->
     zlib:close(Z).
 
 %%%-------------------- Implementation --------------------
+
+check_magic_header(State) ->
+    case magic_header_state(State) of
+	invalid     -> error(not_a_deltazip_file);
+	HeaderState -> State#dzstate{file_header_state=HeaderState}
+    end.
+
+-spec(magic_header_state/1 :: (#dzstate{}) -> empty | invalid | valid).
+magic_header_state(#dzstate{get_size_fun=GetSizeFun,
+			    pread_fun=PReadFun}) ->
+    Size = GetSizeFun(),
+    if Size == 0 ->
+	    empty;
+       Size < 4 ->
+	    invalid;
+       Size >= 4 ->
+	    case PReadFun(0,4) of
+		{ok,Header} when Header == ?DELTAZIP_MAGIC_HEADER ->
+		    valid;
+		_ ->
+		    invalid
+	    end
+    end.
 
 set_initial_position(State=#dzstate{get_size_fun=GetSizeFun}) ->
     State#dzstate{current_pos=GetSizeFun()}.
@@ -119,6 +141,12 @@ pack_multiple([Data], _Z) ->
 pack_multiple([Data | [NextData|_]=Rest], Z) ->
     [envelope(select_method_and_pack_delta(Data, NextData, Z))
      | pack_multiple(Rest, Z)].
+
+opt_prepend_file_header_to_append_spec(State, AppendSpec={Pos,Tail}) ->
+    case State#dzstate.file_header_state of
+	valid -> AppendSpec;
+	empty when Pos == 0 -> {Pos, [?DELTAZIP_MAGIC_HEADER | Tail]}
+    end.
 
 %%%----------
 
