@@ -389,11 +389,17 @@ pack_chunked_middle(Data, RefData, Z) ->
     
     CompMiddle = pack_chunked2(DataMiddle, RefMiddle, Z),
     {?METHOD_CHUNKED_MIDDLE,
-     [<<PrefixLen:32/unsigned, SuffixLen:32/unsigned>>, CompMiddle]}.
+     [varsize_encode(PrefixLen), varsize_encode(SuffixLen), CompMiddle]}.
 
+-define(unstream_1_of_2(Var, Expr), element(2, begin {Var,_} = (Expr) end)).
 unpack_chunked_middle(CompData, RefData, Z) ->
-    <<PrefixLen:32/unsigned, SuffixLen:32/unsigned, CompMiddle/binary>> = CompData,
+    CompMiddle = ?unstream_1_of_2(SuffixLen, varsize_decode
+				  (?unstream_1_of_2(PrefixLen, varsize_decode
+						    (CompData)))),
+						   
     RefMidLen  = byte_size(RefData) - PrefixLen - SuffixLen,
+
+
     <<Prefix:PrefixLen/binary, RefMiddle:RefMidLen/binary, Suffix:SuffixLen/binary>> = RefData,
     [Prefix, unpack_chunked(CompMiddle, RefMiddle, Z), Suffix].
 
@@ -405,6 +411,27 @@ take_chunk(MaxSize, Bin) when MaxSize > byte_size(Bin) ->
 take_chunk(MaxSize, Bin) when MaxSize =< byte_size(Bin) ->
     <<Chunk:MaxSize/binary, Rest/binary>> = Bin,
     {Chunk, Rest}.
+
+
+varsize_encode(N) when N >= 0 ->
+    varsize_encode(N, 0).
+varsize_encode(N, Flag) ->
+    Byte = (N band 16#7F) bor (Flag bsl 7),
+    Rest = N bsr 7,
+    if Rest == 0 ->
+	    [Byte];
+       true ->
+	    [varsize_encode(Rest, 1), Byte]
+    end.
+
+varsize_decode(Bin) -> varsize_decode(Bin, 0).
+varsize_decode(<<Flag:1, Bits:7, Rest/binary>>, Acc) ->
+    Acc2 = (Acc bsl 7) + Bits,
+    if Flag==0 -> {Acc2, Rest};
+       true    -> varsize_decode(Rest, Acc2)
+    end.
+
+%%--------------------
 
 %% -ifdef(EXCLUDE_ZLIB_HEADERS).
 -define(ZLIB_WINDOW_SIZE_BITS, -15).
@@ -455,3 +482,22 @@ inflate(Z, CompData) ->
     Data = zlib:inflate(Z, CompData),
     zlib:inflateEnd(Z),
     Data.
+
+    
+-ifdef(TEST). %============================================================
+varsize_test() ->
+    <<0>> = iolist_to_binary(varsize_encode(0)),
+    <<127>> = iolist_to_binary(varsize_encode(127)),
+    <<129,0>> = iolist_to_binary(varsize_encode(128)),
+    <<129,128, 0>> = iolist_to_binary(varsize_encode(1 bsl 14)),
+    
+    lists:foreach(fun(N) ->
+			  io:format("varsize_test: ~p\n", [N]),
+			  Bin = iolist_to_binary([varsize_encode(N), "Rest"]),
+			  {N, <<"Rest">>} = varsize_decode(Bin)
+		  end,
+		  [0,1, 127,128, 255,256, 1023,1024, 2000, 4000,
+		   60000, 80000, 1000000, 4000000000, 8000000000]),
+    ok.
+    
+-endif.
