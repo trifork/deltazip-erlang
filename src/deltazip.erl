@@ -17,6 +17,14 @@
 -define(DELTAZIP_MAGIC_HEADER, <<16#CEB47A10:32/big>>). 
 -define(FILE_HEADER_LENGTH, 4). 
 
+%% Snapshot methods (0-3):
+-define(METHOD_UNCOMPRESSED,   0).
+-define(METHOD_DEFLATED,       1).
+%% Delta methods (4-15):
+-define(METHOD_CHUNKED,        4).
+-define(METHOD_CHUNKED_MIDDLE, 5).
+-define(METHOD_DITTOFLATE,     6). % Experimental
+
 %% For some reason, zlib can only use 32K-262 bytes (=#7EFA) of a dictionary
 %% when compressing.
 %% (See http://www.zlib.net/manual.html)
@@ -30,12 +38,7 @@
 %%   six bytes for the entire stream")
 -define(LIMIT_SO_DEFLATED_FITS_IN_64KB, 65000).
 
--define(METHOD_UNCOMPRESSED, 0).
--define(METHOD_CHUNKED, 2).
--define(METHOD_DITTOFLATE, 3).
--define(METHOD_CHUNKED_MIDDLE, 4).
-
--define(EXCLUDE_ZLIB_HEADERS, dummy).
+-define(EXCLUDE_ZLIB_HEADERS, dummy). % Flag.
 
 %%%-------------------- API --------------------
 
@@ -136,8 +139,8 @@ compute_current_version(State=#dzstate{current_pos=Pos,
 
 pack_multiple([], _Z) ->
     [];
-pack_multiple([Data], _Z) ->
-    envelope(pack_uncompressed(Data));
+pack_multiple([Data], Z) ->
+    envelope(select_method_and_pack_snapshot(Data, Z));
 pack_multiple([Data | [NextData|_]=Rest], Z) ->
     [envelope(select_method_and_pack_delta(Data, NextData, Z))
      | pack_multiple(Rest, Z)].
@@ -176,10 +179,15 @@ unpack_entry(State, Method, Data) ->
 
 unpack_entry_to_iolist(_State, ?METHOD_UNCOMPRESSED, Data) ->
     unpack_uncompressed(Data);
+unpack_entry_to_iolist(State, ?METHOD_DEFLATED, Data) ->
+    unpack_deflated(Data, State#dzstate.zip_handle);
 unpack_entry_to_iolist(State, ?METHOD_CHUNKED, Data) ->
     unpack_chunked(Data, State#dzstate.current_version, State#dzstate.zip_handle);
 unpack_entry_to_iolist(State, ?METHOD_CHUNKED_MIDDLE, Data) ->
     unpack_chunked_middle(Data, State#dzstate.current_version, State#dzstate.zip_handle).
+
+select_method_and_pack_snapshot(Data, Z) ->
+    pack_deflated(Data, Z).
 
 select_method_and_pack_delta(Data, RefData, Z) ->
     AllowDitto = erlang:get(allow_dittoflate) /= undefined,
@@ -205,7 +213,15 @@ pack_uncompressed(Bin) -> {?METHOD_UNCOMPRESSED, Bin}.
 
 unpack_uncompressed(Bin) -> Bin.
 
-%%%----- Method DITTOFLATE:
+%%%----- Method DEFLATED:
+
+pack_deflated(Bin, Z) ->
+    {?METHOD_DEFLATED, deflate(Z, Bin)}.
+
+unpack_deflated(Bin, Z) ->
+    inflate(Z, Bin).
+
+%%%----- Method DITTOFLATE: (experimental)
 pack_dittoflate(Data, RefData, Z) ->
     {Part1,Part2} = dittoflate:compress(Z, Data, RefData),
     Part2P = dittoflate:pad(Part2),
@@ -402,6 +418,12 @@ deflate(Z, Data, RefData) ->
     CompData = iolist_to_binary(zlib:deflate(Z, Data, finish)),
     zlib:deflateEnd(Z),
     CompData.
+
+deflate(Z, Data) ->
+    zlib:deflateInit(Z, best_compression, deflated, ?ZLIB_WINDOW_SIZE_BITS, 9, default),
+    CompData = iolist_to_binary(zlib:deflate(Z, Data, finish)),
+    zlib:deflateEnd(Z),
+    CompData.
     
 -ifdef(EXCLUDE_ZLIB_HEADERS).
 inflate(Z, CompData, RefData) ->
@@ -412,6 +434,7 @@ inflate(Z, CompData, RefData) ->
 
     zlib:inflateEnd(Z),
     Data.
+
 -else.
 inflate(Z, CompData, RefData) ->
     zlib:inflateInit(Z, ?ZLIB_WINDOW_SIZE_BITS),
@@ -427,4 +450,8 @@ inflate(Z, CompData, RefData) ->
     Data.
 -endif.
     
-
+inflate(Z, CompData) ->
+    zlib:inflateInit(Z, ?ZLIB_WINDOW_SIZE_BITS),
+    Data = zlib:inflate(Z, CompData),
+    zlib:inflateEnd(Z),
+    Data.
