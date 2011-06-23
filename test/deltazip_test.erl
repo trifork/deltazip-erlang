@@ -40,22 +40,18 @@ two_revs_test() ->
     Bin1 = replace_tail(Bin0, AddSpec1),
     deltazip:close(DZa),
 
-    io:format("DB| ~p:~p\n", [?MODULE, ?LINE]), 
     %% Check that Rev1 was added.
     Access1 = access(Bin1),
     DZb = deltazip:open(Access1),
     Rev1 = deltazip:get(DZb), % assertion
     {error, at_beginning} = deltazip:previous(DZb),
 
-    io:format("DB| ~p:~p\n", [?MODULE, ?LINE]), 
     %% Add Rev2.
     Rev2 = <<"Hello, World!">>,
     AddSpec2 = deltazip:add(DZb, Rev2),
-    Bin2 = replace_tail(Bin0, AddSpec2),
+    Bin2 = replace_tail(Bin1, AddSpec2),
     deltazip:close(DZb),
     
-    io:format("DB| Bin2 = ~p\n", [Bin2]), 
-    io:format("DB| ~p:~p\n", [?MODULE, ?LINE]), 
     %% Check that Rev2 was added - and that both Rev1 and Rev2 can be accessed.
     Access2 = access(Bin2),
     DZc = deltazip:open(Access2),
