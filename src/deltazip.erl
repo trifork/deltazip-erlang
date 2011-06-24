@@ -11,7 +11,8 @@
 		  current_pos :: integer(),
 		  current_size :: integer(),
 		  current_method :: integer(),
-		  current_version :: binary() | file_is_empty
+		  current_version :: binary() | file_is_empty,
+		  current_checksum :: integer()
 		 }).
 
 -define(DELTAZIP_MAGIC_HEADER, <<16#CEB47A10:32/big>>). 
@@ -60,8 +61,10 @@ get(#dzstate{current_version=Bin}) ->
 %%     io:format("DB| get @ ~p: ~p\n", [S#dzstate.current_pos, Bin]), 
     Bin.
 
-stats_for_current_entry(#dzstate{current_method=M, current_size=Sz}) ->
-    {M, Sz}.
+stats_for_current_entry(#dzstate{current_method=M,
+				 current_size=Sz,
+				 current_checksum=Ck}) ->
+    {M, Sz, Ck}.
 
 -spec(previous/1 :: (#dzstate{}) -> {ok, #dzstate{}} | {error, at_beginning}).
 previous(#dzstate{current_pos=CP}) when CP =< ?FILE_HEADER_LENGTH ->
@@ -118,9 +121,10 @@ magic_header_state(#dzstate{get_size_fun=GetSizeFun,
 set_initial_position(State=#dzstate{get_size_fun=GetSizeFun}) ->
     State#dzstate{current_pos=GetSizeFun()}.
 
+-define(ENVELOPE_OVERHEAD, (4+4+4)). % Start-tag, checksum, end-tag.
 goto_previous_position(State=#dzstate{current_pos=Pos}) ->
     <<Method:4, Size:28>>=Tag = safe_pread(State, Pos-4, 4),
-    PrevPos = Pos - Size - 8,
+    PrevPos = Pos - Size - ?ENVELOPE_OVERHEAD,
     TagBefore = safe_pread(State, PrevPos, 4),
     if TagBefore /= Tag ->
 	    error({envelope_error, [{end_position, Pos}, {end_tag,Tag},
@@ -134,15 +138,21 @@ goto_previous_position(State=#dzstate{current_pos=Pos}) ->
 compute_current_version(State=#dzstate{current_pos=Pos,
 				       current_size=Size,
 				       current_method=Method}) ->
-    Bin = safe_pread(State, Pos+4, Size),
-    State#dzstate{current_version = unpack_entry(State, Method,Bin)}.
+    <<Adler32:32/unsigned, Bin/binary>> = safe_pread(State, Pos+4, Size+4),
+    Version = unpack_entry(State, Method,Bin),
+    ActualAdler = erlang:adler32(Version),
+    if ActualAdler /= Adler32 -> error({checksum_mismatch,Adler32,ActualAdler});
+       true -> ok
+    end,
+    State#dzstate{current_version = Version,
+		  current_checksum = ActualAdler}.
 
 pack_multiple([], _Z) ->
     [];
 pack_multiple([Data], Z) ->
-    envelope(select_method_and_pack_snapshot(Data, Z));
+    envelope(Data, select_method_and_pack_snapshot(Data, Z));
 pack_multiple([Data | [NextData|_]=Rest], Z) ->
-    [envelope(select_method_and_pack_delta(Data, NextData, Z))
+    [envelope(Data, select_method_and_pack_delta(Data, NextData, Z))
      | pack_multiple(Rest, Z)].
 
 opt_prepend_file_header_to_append_spec(State, AppendSpec={Pos,Tail}) ->
@@ -165,12 +175,13 @@ safe_pread(#dzstate{pread_fun=PReadFun}, Pos, Size) ->
 	    end
     end.    
 
-envelope({Method, Data0}) ->
+envelope(RawVersion, {Method, Data0}) ->
     Data = iolist_to_binary(Data0),
     Sz = byte_size(Data),
 %%     io:format("DB| envelope: method=~p  size=~p\n", [Method, Sz]),
     Tag = <<Method:4, Sz:28>>,
-    [Tag, Data, Tag].
+    Adler32 = <<(erlang:adler32(RawVersion)):32>>,
+    [Tag, Adler32, Data, Tag].
 
 %%%-------------------- Methods -------------------
 unpack_entry(State, Method, Data) ->

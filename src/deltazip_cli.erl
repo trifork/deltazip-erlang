@@ -12,14 +12,16 @@ main(L) ->
 
 interpret_command(["create", DZFile | InputFiles]) ->
     do_create(DZFile, InputFiles);
+interpret_command(["add", DZFile | InputFiles]) ->
+    do_add(DZFile, InputFiles);
 interpret_command(["get", DZFile]) ->
     do_get(DZFile);
 interpret_command(["get", "@" ++ NrStr, DZFile]) ->
     do_get(DZFile, list_to_integer(NrStr));
 interpret_command(["count", DZFile]) ->
     do_count(DZFile);
-interpret_command(["sizes", DZFile]) ->
-    do_sizes(DZFile).
+interpret_command(["list", DZFile]) ->
+    do_list(DZFile).
 
 %%%======================================================================
 
@@ -33,6 +35,25 @@ do_create(DZFile, InputFiles) ->
     {0, Data} = deltazip:add_multiple(DZ, Datas),
     deltazip:close(DZ),
     ok = file:write(Fd, Data),
+    ok = file:close(Fd).
+
+%%%----------
+do_add(DZFile, InputFiles) ->
+    {ok, Fd} = file:open(DZFile, [read, write, binary]),
+    Access = fd_access(Fd),
+    DZ = deltazip:open(Access),
+    Datas = [begin {ok,D} = file:read_file(F), D end
+	     || F <- InputFiles],
+    {Pos, NewTail} = deltazip:add_multiple(DZ, Datas),
+    deltazip:close(DZ),
+
+    %% Write the new tail:
+    ok = file:pwrite(Fd, Pos, NewTail),
+
+    %% Truncate: (alas, there is no file:truncate/2)
+    {ok,_} = file:position(Fd, Pos + iolist_size(NewTail)),
+    ok = file:truncate(Fd),
+    
     ok = file:close(Fd).
 
 %%%----------
@@ -86,7 +107,7 @@ count_entries(DZ, Acc) ->
     end.
 
 %%%----------
-do_sizes(DZFile) ->
+do_list(DZFile) ->
     {ok, Fd} = file:open(DZFile, [read, binary]),
     Access = fd_access(Fd),
     DZ = deltazip:open(Access),
@@ -95,16 +116,16 @@ do_sizes(DZFile) ->
     ok = file:close(Fd).
 
 print_entry_stats(DZ) ->
-    io:format("~s:\t~s\t~s\t~s\n", ["Nr", "Method", "CompSize", "VersionSize"]),
+    io:format("~s:\t~s\t~s\t~s\t~s\n", ["Nr", "Method", "CompSize", "VersionSize", "Checksum"]),
     case deltazip:get(DZ) of
 	file_is_empty -> 0;
 	_ -> print_entry_stats(DZ, 0)
     end.
     
 print_entry_stats(DZ, Nr) ->
-    {Method,CompSize} = deltazip:stats_for_current_entry(DZ),
+    {Method,CompSize,Checksum} = deltazip:stats_for_current_entry(DZ),
     UncompSize = byte_size(deltazip:get(DZ)),
-    io:format("~b:\t~2b\t~8b\t~8b\n", [-Nr, Method, CompSize, UncompSize]),
+    io:format("~b:\t~2b\t~8b\t~8b\t~10b\n", [-Nr, Method, CompSize, UncompSize, Checksum]),
     case deltazip:previous(DZ) of
 	{ok, DZ2} -> print_entry_stats(DZ2, Nr+1);
 	{error, at_beginning} -> ok
