@@ -125,7 +125,7 @@ print_entry_stats(DZ) ->
 print_entry_stats(DZ, Nr) ->
     {Method,CompSize,Checksum} = deltazip:stats_for_current_entry(DZ),
     UncompSize = byte_size(deltazip:get(DZ)),
-    io:format("~b:\t~2b\t~8b\t~8b\t~8.16b\n", [-Nr, Method, CompSize, UncompSize, Checksum]),
+    io:format("~b:\tM~b\t~8b\t~8b\t~8.16b\n", [-Nr, Method, CompSize, UncompSize, Checksum]),
     case deltazip:previous(DZ) of
 	{ok, DZ2} -> print_entry_stats(DZ2, Nr+1);
 	{error, at_beginning} -> ok
