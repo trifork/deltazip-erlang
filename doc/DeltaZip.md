@@ -1,12 +1,15 @@
 <head>
 <meta HTTP-EQUIV="content-type" CONTENT="text/html; charset=UTF-8">
 <style>
+  pre {margin: 0em 4em;}
   table {border: thin solid black;}
   table td {border: thin solid black;}
-  pre {margin: 0em 4em;}
-  /*table.format {border: thin solid black;}*/
-  table.format td {border: thin solid black; text-align: center;}
-
+/**/
+  table.format td {text-align: center; padding: 0em 1em; }
+  table.enum {border-collapse: collapse;}
+  table.enum th {padding: 0em 1em; text-align: left;}
+  table.enum td {padding: 0.1em 1em; border-width: thin 0px;}
+  table.enum td:first-child {text-align: right; padding: 0em 4em;}
 </style>
 </head>
 
@@ -27,10 +30,10 @@ A DeltaZip file (or DeltaZip archive) consists of a sequence of *chapters*, each
 </tr>
 
 <tr>
-<td>V<sub>1</sub> -- V<sub>2</sub></td>
-<td>V<sub>2</sub> -- V<sub>3</sub></td>
+<td>V<sub>1</sub> &#8722; V<sub>2</sub></td>
+<td>V<sub>2</sub> &#8722; V<sub>3</sub></td>
 <td>&nbsp;&nbsp;&hellip;&nbsp;&nbsp;</td>
-<td>V<sub>N-1</sub> -- V<sub>N</sub></td>
+<td>V<sub>N-1</sub> &#8722; V<sub>N</sub></td>
 <td>V<sub>N</sub></td>
 </tr>
 </table>
@@ -72,30 +75,34 @@ The file format in the present form only supports version sizes up to 2<sup>28</
 
 ### Chapters
 
-    chapter     ::= chapter-tag data chapter-tag
+    chapter     ::= chapter-tag adler data chapter-tag
     chapter-tag ::= {Method:4, Size:28}
+    adler       ::= uint32
     data        ::= byte* // Length specified by Size
 
 The leading and trailing chapter-tag must be identical.
+
+'Adler' is the Adler32 checksum of the (raw, uncompressed) version
+contained in the chapter.
 
 The Method is a number signifying how the chapter's file version is represented.
 
 The values 0-3 are used for self-contained chapters:
 
-<table>
+<table class="enum">
 <tr><th>Method value</th><th>Method name</th></tr>
 <tr><td>0</td><td>Uncompressed (raw).</td></tr>
 <tr><td>1</td><td>Deflated (using window size 32K, no zlib header).</td></tr>
-<tr><td>2-3</td><td>Unassigned.</td></tr>
+<tr><td>2&ndash;3</td><td>Unassigned.</td></tr>
 </table>
 
 The values 4-15 are used for delta-chapters:
-<table>
+<table class="enum">
 <tr><th>Method value</th><th>Method name</th></tr>
 <tr><td>4</td><td>Chunked.</td></tr>
 <tr><td>5</td><td>Chunked-Middle.</td></tr>
 <tr><td>6</td><td>Reserved for Dittoflate.</td></tr>
-<tr><td>7-15</td><td>Unassigned.</td></tr>
+<tr><td>7&ndash;15</td><td>Unassigned.</td></tr>
 </table>
 
 The delta compression methods are described below.
@@ -112,12 +119,12 @@ The "Chunked" compression method:
 
 Chunk methods:
 
-<table>
+<table class="enum">
 <tr><th>Chunk method value</th><th>Method name</th></tr>
 <tr><td>0</td><td>Deflated.</td></tr>
 <tr><td>1</td><td>Prefix-copy.</td></tr>
 <tr><td>2</td><td>Offset-copy.</td></tr>
-<tr><td>3-31</td><td>Unassigned.</td></tr>
+<tr><td>3&ndash;31</td><td>Unassigned.</td></tr>
 </table>
 
 Chunk methods representations:
@@ -130,7 +137,8 @@ Chunk methods representations:
     prefix-copy-chunk-data ::= copy-lengthM1
     offset-copy-chunk-data ::= offset-lengthM1 copy-lengthM1
 
-    copy-lengthM1 ::= uint16
+    // Lengths minus one:
+    copy-lengthM1   ::= uint16
     offset-lengthM1 ::= uint16
 
 Algorithm for "Chunked":
