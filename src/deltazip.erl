@@ -25,6 +25,7 @@
 -define(METHOD_CHUNKED,        4).
 -define(METHOD_CHUNKED_MIDDLE, 5).
 -define(METHOD_DITTOFLATE,     6). % Experimental
+-define(METHOD_CHUNKED_MIDDLE2, 7).
 
 %% For some reason, zlib can only use 32K-262 bytes (=#7EFA) of a dictionary
 %% when compressing.
@@ -207,9 +208,10 @@ select_method_and_pack_delta(Data, RefData, Z) ->
 		      [fun pack_dittoflate/3];
 		 true ->
 		      [%fun pack_chunked/3,
-		       fun pack_chunked_middle/3]
-			  ++
-			  [fun pack_dittoflate/3 || AllowDitto]
+		       fun pack_chunked_middle/3,
+		       fun pack_chunked_middle2/3
+		      ]
+			  ++ [fun pack_dittoflate/3 || AllowDitto]
 	      end,
     Packs = [begin P={_,Bin}=Method(Data, RefData, Z),
 		   
@@ -243,12 +245,6 @@ pack_dittoflate(Data, RefData, Z) ->
 -define(CHUNK_METHOD_DEFLATE, 0).
 -define(CHUNK_METHOD_PREFIX_COPY, 1).
 -define(CHUNK_METHOD_OFFSET_COPY, 2).
-
-%% Method arguments for PREFIX_COPY and OFFSET_COPY:
--define(CHUNK_ARG_NO_CONTEXT,        0).
--define(CHUNK_ARG_PRIORITIZE_PAST,   1).
--define(CHUNK_ARG_PRIORITIZE_FUTURE, 2).
-
 
 unpack_chunked(<<>>, _RefData, _Z) ->
     <<>>;
@@ -296,8 +292,8 @@ decide_chunk_method_for_next_chunk(Data, RefData, Z) ->
     Options = gen_chunk_deflate_options(byte_size(Data), byte_size(RefData)),
     EvaledOptions0 = lists:map(fun(Opt) -> evaluate_deflate_option(Opt, Data, RefData, Z) end,
 			      Options),
-    EvaledOptions = [evaluate_prefix_option(Data, RefData, Z, ?CHUNK_ARG_NO_CONTEXT),
-		     evaluate_offset_copy_option(Data, RefData, Z, ?CHUNK_ARG_NO_CONTEXT)
+    EvaledOptions = [evaluate_prefix_option(Data, RefData, Z),
+		     evaluate_offset_copy_option(Data, RefData, Z)
 		     | EvaledOptions0],
     SortedOptions = lists:keysort(#evaled_chunk_option.ratio, EvaledOptions),
     hd(SortedOptions).
@@ -340,7 +336,7 @@ evaluate_deflate_option(#deflate_option{rskip_spec = RSkipSpec, dsize = DSize}, 
 			   data_rest=DataRest,
 			   ref_rest=RestRefData}.
 
-evaluate_prefix_option(Data, RefData, Z, ContextPrio) ->
+evaluate_prefix_option(Data, RefData, Z) ->
     {Data2, _} = take_chunk(65536, Data),	% Limit common prefix to 64KB.
     PrefixLen = binary:longest_common_prefix([Data2, RefData]),
 
@@ -358,7 +354,7 @@ evaluate_prefix_option(Data, RefData, Z, ContextPrio) ->
 
 	    Ratio = (byte_size(CompData) + ?COPY_OVERHEAD_PENALTY_BYTES) / PrefixLen,
 	    #evaled_chunk_option{ratio=Ratio,
-				 chunk_method= <<?CHUNK_METHOD_PREFIX_COPY:5, ContextPrio:3>>,
+				 chunk_method= <<?CHUNK_METHOD_PREFIX_COPY:5, 0:3>>,
 				 comp_data=CompData,
 				 data_rest=DataRest,
 				 ref_rest=RefRest};
@@ -366,7 +362,7 @@ evaluate_prefix_option(Data, RefData, Z, ContextPrio) ->
 	    #evaled_chunk_option{ratio=infinity}
     end.
 
-evaluate_offset_copy_option(Data, RefData, Z, ContextPrio) ->
+evaluate_offset_copy_option(Data, RefData, Z) ->
     SuffixLen = binary:longest_common_suffix([Data, RefData]),
     DataSz    = byte_size(Data),
     RefDataSz = byte_size(RefData),
@@ -390,7 +386,7 @@ evaluate_offset_copy_option(Data, RefData, Z, ContextPrio) ->
 
 	    Ratio = (byte_size(CompData) + 0) / Len,
 	    #evaled_chunk_option{ratio=Ratio,
-				 chunk_method= <<?CHUNK_METHOD_OFFSET_COPY:5, ContextPrio:3>>,
+				 chunk_method= <<?CHUNK_METHOD_OFFSET_COPY:5, 0:3>>,
 				 comp_data=CompData,
 				 data_rest=DataRest,
 				 ref_rest=RefRest};
@@ -406,25 +402,57 @@ do_rskip(RSkipSpec, RefData) ->
     {RefChunk, RestRefData}.    
 
 %%%----- Method CHUNKED_MIDDLE:
-pack_chunked_middle(Data, RefData, Z) ->
-%%     DataLen = byte_size(Data),
-%%     RefLen  = byte_size(RefData),
+-define(CONTEXT_PRIORITIZE_PAST,   1).
+-define(CONTEXT_PRIORITIZE_FUTURE, 2).
 
+pack_chunked_middle(Data, RefData, Z) ->
+    {PrefixLen, SuffixLen, DataMiddle, _, RefMiddle, _} =
+	identify_middle(Data, RefData),
+    CompMiddle = pack_chunked2(DataMiddle, RefMiddle, Z),
+    {?METHOD_CHUNKED_MIDDLE,
+     [varlen_encode(PrefixLen), varlen_encode(SuffixLen), CompMiddle]}.
+
+pack_chunked_middle2(Data, RefData, Z) ->
+    {PrefixLen, SuffixLen, DataMiddle, RefPrefix, RefMiddle, RefSuffix} =
+	identify_middle(Data, RefData),
+    Attempts = [begin
+		    Mid = pack_chunked2(DataMiddle, fill_context(RefMiddle, Ctx, RefPrefix, RefSuffix), Z),
+		    {Ctx, Mid, -byte_size(Mid)}
+		end
+		|| Ctx <- [?CONTEXT_PRIORITIZE_PAST,
+			   ?CONTEXT_PRIORITIZE_FUTURE]],
+    {BestCtx, BestCompMiddle, _} = lists:keysort(3, Attempts),
+    {?METHOD_CHUNKED_MIDDLE,
+     [varlen_encode(PrefixLen), varlen_encode(SuffixLen),
+      BestCtx, BestCompMiddle]}.
+
+fill_context(Mid, ?CONTEXT_PRIORITIZE_PAST, Past, Future) ->
+    prepend_until_window_size(prepend_until_window_size(Mid, Past, suffix), Future, prefix);
+fill_context(Mid, ?CONTEXT_PRIORITIZE_FUTURE, Past, Future) ->
+    prepend_until_window_size(prepend_until_window_size(Mid, Future, prefix), Past, suffix).
+    
+
+prepend_until_window_size(Org, Pre, prefix) ->
+    {Part,_} = take_chunk(?WINDOW_SIZE-byte_size(Org), Pre),
+    <<Part/binary, Org/binary>>.
+
+
+identify_middle(Data, RefData) ->
     %% Calculate and remove prefix:
     PrefixLen = binary:longest_common_prefix([Data, RefData]),
     <<_:PrefixLen/binary, DataSansPrefix/binary>> = Data,
-    <<_:PrefixLen/binary, RefSansPrefix/binary >> = RefData,
+    <<RefPrefix:PrefixLen/binary, RefSansPrefix/binary >> = RefData,
 
     %% Calculate and remove suffix:
     SuffixLen = binary:longest_common_suffix([DataSansPrefix, RefSansPrefix]),
     DataMidLen = byte_size(DataSansPrefix) - SuffixLen,
     RefMidLen  = byte_size(RefSansPrefix)  - SuffixLen,
     <<DataMiddle:DataMidLen/binary, _:SuffixLen/binary>> = DataSansPrefix,
-    <<RefMiddle:RefMidLen/binary,   _:SuffixLen/binary>> = RefSansPrefix,
+    <<RefMiddle:RefMidLen/binary,  RefSuffix:SuffixLen/binary>> = RefSansPrefix,
     
-    CompMiddle = pack_chunked2(DataMiddle, RefMiddle, Z),
-    {?METHOD_CHUNKED_MIDDLE,
-     [varlen_encode(PrefixLen), varlen_encode(SuffixLen), CompMiddle]}.
+    {PrefixLen, SuffixLen, DataMiddle, RefPrefix, RefMiddle, RefSuffix}.
+
+
 
 -define(unstream_1_of_2(Var, Expr), element(2, begin {Var,_} = (Expr) end)).
 unpack_chunked_middle(CompData, RefData, Z) ->
