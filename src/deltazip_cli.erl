@@ -1,6 +1,7 @@
 -module(deltazip_cli).
 
 -export([main/1]).
+-export([interpret_command/1]).
 
 main(L) ->
     put(exit_code, 0),
@@ -21,17 +22,31 @@ interpret_command(["get", "@" ++ NrStr, DZFile]) ->
 interpret_command(["count", DZFile]) ->
     do_count(DZFile);
 interpret_command(["list", DZFile]) ->
-    do_list(DZFile).
+    do_list(DZFile);
+interpret_command(["allow_ditto" | Rest]) ->
+    put(allow_dittoflate, true), interpret_command(Rest);
+interpret_command(["force_ditto" | Rest]) ->
+    put(force_dittoflate, true), interpret_command(Rest);
+interpret_command(["split", DZFile, Prefix]) ->
+    do_split(DZFile, Prefix);
+interpret_command(["rsplit", DZFile, Prefix]) ->
+    do_rsplit(DZFile, Prefix);
+interpret_command(["repack", OrgDZ, NewDZ]) ->
+    do_repack(OrgDZ, NewDZ).
+
 
 %%%======================================================================
 
 %%%----------
 do_create(DZFile, InputFiles) ->
+    Datas = [begin {ok,D} = file:read_file(F), D end
+	     || F <- InputFiles],
+    do_create2(DZFile, Datas).
+
+do_create2(DZFile, Datas) ->
     {ok, Fd} = file:open(DZFile, [write, exclusive, binary]),
     Access = fd_access(Fd),
     DZ = deltazip:open(Access),
-    Datas = [begin {ok,D} = file:read_file(F), D end
-	     || F <- InputFiles],
     {0, Data} = deltazip:add_multiple(DZ, Datas),
     deltazip:close(DZ),
     ok = file:write(Fd, Data),
@@ -129,6 +144,70 @@ print_entry_stats(DZ, Nr) ->
     case deltazip:previous(DZ) of
 	{ok, DZ2} -> print_entry_stats(DZ2, Nr+1);
 	{error, at_beginning} -> ok
+    end.
+
+%%%----------
+do_split(DZFile, Prefix) ->
+    {ok, Fd} = file:open(DZFile, [read, binary]),
+    Access = fd_access(Fd),
+    DZ = deltazip:open(Access),
+    split_loop(DZ, Prefix, 1),
+    deltazip:close(DZ),
+    ok = file:close(Fd).
+
+
+split_loop(DZ, Prefix, Nr) ->
+    case deltazip:get(DZ) of
+	file_is_empty -> 0;
+	Data ->
+	    FileName = lists:flatten(io_lib:format("~s~4..0b", [Prefix, Nr])),
+	    ok = file:write_file(FileName, Data),
+	    case deltazip:previous(DZ) of
+		{ok, DZ2} -> split_loop(DZ2, Prefix, Nr+1);
+		{error, at_beginning} -> ok
+	    end		
+    end.
+
+
+do_rsplit(DZFile, Prefix) ->
+    {ok, Fd} = file:open(DZFile, [read, binary]),
+    Access = fd_access(Fd),
+    DZ = deltazip:open(Access),
+    rsplit_loop(DZ, Prefix, 9999),
+    deltazip:close(DZ),
+    ok = file:close(Fd).
+
+
+rsplit_loop(DZ, Prefix, Nr) ->
+    case deltazip:get(DZ) of
+	file_is_empty -> 0;
+	Data ->
+	    FileName = lists:flatten(io_lib:format("~s~4..0b", [Prefix, Nr])),
+	    ok = file:write_file(FileName, Data),
+	    case deltazip:previous(DZ) of
+		{ok, DZ2} -> rsplit_loop(DZ2, Prefix, Nr-1);
+		{error, at_beginning} -> ok
+	    end		
+    end.
+
+%%%----------
+do_repack(OrgDZ, NewDZ) ->
+    {ok, Fd} = file:open(OrgDZ, [read, binary]),
+    Access = fd_access(Fd),
+    DZ = deltazip:open(Access),
+    Datas = lists:reverse(read_loop(DZ)),
+    deltazip:close(DZ),
+    ok = file:close(Fd),
+    do_create2(NewDZ, Datas).
+
+read_loop(DZ) ->
+    case deltazip:get(DZ) of
+	file_is_empty -> [];
+	Data ->
+	    [Data | case deltazip:previous(DZ) of
+			{ok, DZ2} -> read_loop(DZ2);
+			{error, at_beginning} -> []
+		    end]
     end.
 
 %%%======================================================================
