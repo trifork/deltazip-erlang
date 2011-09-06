@@ -196,7 +196,9 @@ unpack_entry_to_iolist(State, ?METHOD_DEFLATED, Data) ->
 unpack_entry_to_iolist(State, ?METHOD_CHUNKED, Data) ->
     unpack_chunked(Data, State#dzstate.current_version, State#dzstate.zip_handle);
 unpack_entry_to_iolist(State, ?METHOD_CHUNKED_MIDDLE, Data) ->
-    unpack_chunked_middle(Data, State#dzstate.current_version, State#dzstate.zip_handle).
+    unpack_chunked_middle(Data, State#dzstate.current_version, State#dzstate.zip_handle);
+unpack_entry_to_iolist(State, ?METHOD_CHUNKED_MIDDLE2, Data) ->
+    unpack_chunked_middle2(Data, State#dzstate.current_version, State#dzstate.zip_handle).
 
 select_method_and_pack_snapshot(Data, Z) ->
     pack_deflated(Data, Z).
@@ -336,21 +338,15 @@ evaluate_deflate_option(#deflate_option{rskip_spec = RSkipSpec, dsize = DSize}, 
 			   data_rest=DataRest,
 			   ref_rest=RestRefData}.
 
-evaluate_prefix_option(Data, RefData, Z) ->
+evaluate_prefix_option(Data, RefData, _Z) ->
     {Data2, _} = take_chunk(65536, Data),	% Limit common prefix to 64KB.
     PrefixLen = binary:longest_common_prefix([Data2, RefData]),
 
     if PrefixLen > 0 ->
-	    {_Prefix,TmpDataRest} = erlang:split_binary(Data, PrefixLen),
-	    {_,TmpRestRefData} = erlang:split_binary(RefData, PrefixLen),
+	    {_Prefix,DataRest} = erlang:split_binary(Data, PrefixLen),
+	    {_,RefRest} = erlang:split_binary(RefData, PrefixLen),
 
-	    #evaled_chunk_option{comp_data=NextCompData, data_rest=NextDataRest, ref_rest=NextRefRest} =
-		decide_chunk_method_for_next_chunk(TmpDataRest, TmpRestRefData, Z),
-
-	    CompData = <<(PrefixLen-1):16/unsigned,
-			NextCompData/binary>>,
-	    DataRest = NextDataRest,
-	    RefRest  = NextRefRest,
+	    CompData = <<(PrefixLen-1):16/unsigned>>,
 
 	    Ratio = (byte_size(CompData) + ?COPY_OVERHEAD_PENALTY_BYTES) / PrefixLen,
 	    #evaled_chunk_option{ratio=Ratio,
@@ -362,7 +358,7 @@ evaluate_prefix_option(Data, RefData, Z) ->
 	    #evaled_chunk_option{ratio=infinity}
     end.
 
-evaluate_offset_copy_option(Data, RefData, Z) ->
+evaluate_offset_copy_option(Data, RefData, _Z) ->
     SuffixLen = binary:longest_common_suffix([Data, RefData]),
     DataSz    = byte_size(Data),
     RefDataSz = byte_size(RefData),
@@ -372,17 +368,10 @@ evaluate_offset_copy_option(Data, RefData, Z) ->
        Offset > 0,
        Offset =< 65536 ->
 	    Len = min(65536, SuffixLen),
-	    {_Prefix,TmpDataRest} = erlang:split_binary(Data, Len),
-	    {_,TmpRestRefData} = erlang:split_binary(RefData, Offset + Len),
-
-	    #evaled_chunk_option{comp_data=NextCompData, data_rest=NextDataRest, ref_rest=NextRefRest} =
-		decide_chunk_method_for_next_chunk(TmpDataRest, TmpRestRefData, Z),
-
-	    CompData = <<(Offset-1):16/unsigned, (Len-1):16/unsigned,
-			NextCompData/binary>>,
-	    DataRest = NextDataRest,
-	    RefRest  = NextRefRest,
+	    {_Prefix,DataRest} = erlang:split_binary(Data, Len),
+	    {_,RefRest} = erlang:split_binary(RefData, Offset + Len),
 	    
+	    CompData = <<(Offset-1):16/unsigned, (Len-1):16/unsigned>>,
 
 	    Ratio = (byte_size(CompData) + 0) / Len,
 	    #evaled_chunk_option{ratio=Ratio,
@@ -413,66 +402,64 @@ pack_chunked_middle(Data, RefData, Z) ->
      [varlen_encode(PrefixLen), varlen_encode(SuffixLen), CompMiddle]}.
 
 pack_chunked_middle2(Data, RefData, Z) ->
-    {PrefixLen, SuffixLen, DataMiddle, RefPrefix, RefMiddle, RefSuffix} =
+    {PrefixLen, SuffixLen, DataMiddle, RefPre, RefMiddle, RefSuf} =
 	identify_middle(Data, RefData),
-    Attempts = [begin
-		    Mid = pack_chunked2(DataMiddle, fill_context(RefMiddle, Ctx, RefPrefix, RefSuffix), Z),
-		    {Ctx, Mid, -byte_size(Mid)}
-		end
-		|| Ctx <- [?CONTEXT_PRIORITIZE_PAST,
-			   ?CONTEXT_PRIORITIZE_FUTURE]],
-    {BestCtx, BestCompMiddle, _} = lists:keysort(3, Attempts),
-    {?METHOD_CHUNKED_MIDDLE,
-     [varlen_encode(PrefixLen), varlen_encode(SuffixLen),
-      BestCtx, BestCompMiddle]}.
-
-fill_context(Mid, ?CONTEXT_PRIORITIZE_PAST, Past, Future) ->
-    prepend_until_window_size(prepend_until_window_size(Mid, Past, suffix), Future, prefix);
-fill_context(Mid, ?CONTEXT_PRIORITIZE_FUTURE, Past, Future) ->
-    prepend_until_window_size(prepend_until_window_size(Mid, Future, prefix), Past, suffix).
-    
-
-prepend_until_window_size(Org, Pre, prefix) ->
-    {Part,_} = take_chunk(?WINDOW_SIZE-byte_size(Org), Pre),
-    <<Part/binary, Org/binary>>.
-
+    {PrePart, _} = take_end_chunk(?WINDOW_SIZE div 2, RefPre),
+    RefToUse = <<PrePart/binary, RefMiddle/binary, RefSuf/binary>>,
+    CompMiddle = pack_chunked2(DataMiddle, RefToUse, Z),
+    {?METHOD_CHUNKED_MIDDLE2,
+     [varlen_encode(PrefixLen), varlen_encode(SuffixLen), CompMiddle]}.
 
 identify_middle(Data, RefData) ->
-    %% Calculate and remove prefix:
+    %% Calculate prefix and suffix lengths:
     PrefixLen = binary:longest_common_prefix([Data, RefData]),
     <<_:PrefixLen/binary, DataSansPrefix/binary>> = Data,
     <<RefPrefix:PrefixLen/binary, RefSansPrefix/binary >> = RefData,
-
-    %% Calculate and remove suffix:
     SuffixLen = binary:longest_common_suffix([DataSansPrefix, RefSansPrefix]),
-    DataMidLen = byte_size(DataSansPrefix) - SuffixLen,
-    RefMidLen  = byte_size(RefSansPrefix)  - SuffixLen,
-    <<DataMiddle:DataMidLen/binary, _:SuffixLen/binary>> = DataSansPrefix,
-    <<RefMiddle:RefMidLen/binary,  RefSuffix:SuffixLen/binary>> = RefSansPrefix,
-    
+
+    %% Take middle:
+    {_, DataMiddle,_} = take_middle(Data, PrefixLen, SuffixLen),
+    {RefPrefix, RefMiddle, RefSuffix} = take_middle(RefData, PrefixLen, SuffixLen),
+
     {PrefixLen, SuffixLen, DataMiddle, RefPrefix, RefMiddle, RefSuffix}.
 
-
+take_middle(Bin, PrefixLen, SuffixLen) ->
+    MidLen  = byte_size(Bin) - PrefixLen - SuffixLen,
+    <<Prefix:PrefixLen/binary, Middle:MidLen/binary,  Suffix:SuffixLen/binary >> = Bin,
+    {Prefix, Middle, Suffix}.
 
 -define(unstream_1_of_2(Var, Expr), element(2, begin {Var,_} = (Expr) end)).
 unpack_chunked_middle(CompData, RefData, Z) ->
     CompMiddle = ?unstream_1_of_2(SuffixLen, varlen_decode
 				  (?unstream_1_of_2(PrefixLen, varlen_decode
 						    (CompData)))),
-						   
-    RefMidLen  = byte_size(RefData) - PrefixLen - SuffixLen,
-
-
-    <<Prefix:PrefixLen/binary, RefMiddle:RefMidLen/binary, Suffix:SuffixLen/binary>> = RefData,
+    {Prefix, RefMiddle, Suffix} = take_middle(RefData, PrefixLen, SuffixLen),
     [Prefix, unpack_chunked(CompMiddle, RefMiddle, Z), Suffix].
+
+
+unpack_chunked_middle2(CompData, RefData, Z) ->
+    CompMiddle = ?unstream_1_of_2(SuffixLen, varlen_decode
+				  (?unstream_1_of_2(PrefixLen, varlen_decode
+						    (CompData)))),
+    {Prefix, RefMiddle, Suffix} = take_middle(RefData, PrefixLen, SuffixLen),
+    {PrePart, _} = take_end_chunk(?WINDOW_SIZE div 2, Prefix),
+    RefToUse = <<PrePart/binary, RefMiddle/binary, Suffix/binary>>,
+    [Prefix, unpack_chunked(CompMiddle, RefToUse, Z), Suffix].
 
 
 %%%-------------------- Utility -------------------
 
-take_chunk(MaxSize, Bin) when MaxSize > byte_size(Bin) ->
+take_chunk(MaxSize, Bin) when MaxSize >= byte_size(Bin) ->
     {Bin,<<>>};
-take_chunk(MaxSize, Bin) when MaxSize =< byte_size(Bin) ->
+take_chunk(MaxSize, Bin) when MaxSize < byte_size(Bin) ->
     <<Chunk:MaxSize/binary, Rest/binary>> = Bin,
+    {Chunk, Rest}.
+
+take_end_chunk(MaxSize, Bin) when MaxSize >= byte_size(Bin) ->
+    {Bin,<<>>};
+take_end_chunk(MaxSize, Bin) when MaxSize < byte_size(Bin) ->
+    SkipAmount = byte_size(Bin) - MaxSize,
+    <<Rest:SkipAmount/binary, Chunk:MaxSize/binary>> = Bin,
     {Chunk, Rest}.
 
 
