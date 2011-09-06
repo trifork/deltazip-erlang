@@ -2,5 +2,4 @@
 *.dump
 *~
 .eunit/
-ebin/
 *.dz
