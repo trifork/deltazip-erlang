@@ -102,14 +102,19 @@ The values 4-15 are used for delta-chapters:
 <tr><td>4</td><td>Chunked.</td></tr>
 <tr><td>5</td><td>Chunked-Middle.</td></tr>
 <tr><td>6</td><td>Reserved for Dittoflate.</td></tr>
-<tr><td>7&ndash;15</td><td>Unassigned.</td></tr>
+<tr><td>7</td><td>Chunked-Middle2.</td></tr>
+<tr><td>8&ndash;15</td><td>Unassigned.</td></tr>
 </table>
 
 The delta compression methods are described below.
 
 ### Delta compression methods
 
-The "Chunked" compression method:
+The notation "array[a;b]" means the sub-array which is obtained by
+taking the "b" first elements of "array", then removing the first "a"
+elements.
+
+#### The "Chunked" compression method:
 
     chunked-chapter-data ::= chunk*
     chunk        ::= chunk-header chunk-size chunk-data
@@ -173,7 +178,13 @@ Algorithm for "Chunked":
     }
 
 
-The "Chunked Middle" compression method:
+#### The "Chunked Middle" compression method:
+
+The old and new version have a common prefix and a common suffix.
+The middle of the old version is chunk-encoded relative to the middle of the new version.
+
+
+Representation:
 
     chunked-middle-chapter-data ::= prefix-length suffix-length chunked-chapter-data
     prefix-length ::= varlen_int
@@ -189,3 +200,26 @@ Algorithm for "Chunked Middle":
         chunked()
     }
 
+
+#### The "Chunked Middle 2" compression method:
+
+The old and new version have a common prefix and a common suffix.
+The middle of the old version is chunk-encoded relative to a part of
+the new version starting up to WINDOW_SIZE/2 before the prefix ends.
+
+Representation:
+
+    chunked-middle2-chapter-data ::= prefix-length suffix-length chunked-chapter-data
+    prefix-length ::= varlen_int
+    suffix-length ::= varlen_int
+
+    varlen_int ::= {0:1, Bits:7}            // value is Bits
+                 | {1:1, Bits:7} varlen_int // Bits are MSB of the value.
+
+Algorithm for "Chunked Middle 2":
+
+    chunked_middle(prefix_length, suffix_length) {
+        cut_length := max(0, prefix_length - WINDOW_SIZE/2);
+        org := org[cut_length; |org|];
+        chunked()
+    }
