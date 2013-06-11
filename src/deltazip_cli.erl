@@ -45,7 +45,7 @@ do_create(DZFile, InputFiles) ->
 
 do_create2(DZFile, Datas) ->
     {ok, Fd} = file:open(DZFile, [write, exclusive, binary]),
-    Access = fd_access(Fd),
+    Access = deltazip_util:fd_access(Fd),
     DZ = deltazip:open(Access),
     {0, Data} = deltazip:add_multiple(DZ, Datas),
     deltazip:close(DZ),
@@ -55,7 +55,7 @@ do_create2(DZFile, Datas) ->
 %%%----------
 do_add(DZFile, InputFiles) ->
     {ok, Fd} = file:open(DZFile, [read, write, binary]),
-    Access = fd_access(Fd),
+    Access = deltazip_util:fd_access(Fd),
     DZ = deltazip:open(Access),
     Datas = [begin {ok,D} = file:read_file(F), D end
 	     || F <- InputFiles],
@@ -78,7 +78,7 @@ do_get(DZFile) ->
 %%% Get version Nr counted from the most recent.
 do_get(DZFile, Nr) ->
     {ok, Fd} = file:open(DZFile, [read, binary]),
-    Access = fd_access(Fd),
+    Access = deltazip_util:fd_access(Fd),
     DZ = deltazip:open(Access),
     DZ2 = lists:foldl(fun(_,at_beginning) -> at_beginning;
 			 (_,LocalDZ) ->
@@ -96,13 +96,13 @@ do_get(DZFile, Nr) ->
 	    Data = deltazip:get(DZ2),
 	    deltazip:close(DZ2),
 	    ok = file:close(Fd),
-	    io:put_chars(Data) % TODO: Is non-ascii data handled correctly?
+	    io:format("~s", [Data]) % TODO: Is non-ascii data handled correctly?
     end.
 
 %%%----------
 do_count(DZFile) ->
     {ok, Fd} = file:open(DZFile, [read, binary]),
-    Access = fd_access(Fd),
+    Access = deltazip_util:fd_access(Fd),
     DZ = deltazip:open(Access),
     Cnt = count_entries(DZ),
     deltazip:close(DZ),
@@ -124,7 +124,7 @@ count_entries(DZ, Acc) ->
 %%%----------
 do_list(DZFile) ->
     {ok, Fd} = file:open(DZFile, [read, binary]),
-    Access = fd_access(Fd),
+    Access = deltazip_util:fd_access(Fd),
     DZ = deltazip:open(Access),
     print_entry_stats(DZ),
     deltazip:close(DZ),
@@ -149,7 +149,7 @@ print_entry_stats(DZ, Nr) ->
 %%%----------
 do_split(DZFile, Prefix) ->
     {ok, Fd} = file:open(DZFile, [read, binary]),
-    Access = fd_access(Fd),
+    Access = deltazip_util:fd_access(Fd),
     DZ = deltazip:open(Access),
     split_loop(DZ, Prefix, 1),
     deltazip:close(DZ),
@@ -171,7 +171,7 @@ split_loop(DZ, Prefix, Nr) ->
 
 do_rsplit(DZFile, Prefix) ->
     {ok, Fd} = file:open(DZFile, [read, binary]),
-    Access = fd_access(Fd),
+    Access = deltazip_util:fd_access(Fd),
     DZ = deltazip:open(Access),
     rsplit_loop(DZ, Prefix, 9999),
     deltazip:close(DZ),
@@ -193,7 +193,7 @@ rsplit_loop(DZ, Prefix, Nr) ->
 %%%----------
 do_repack(OrgDZ, NewDZ) ->
     {ok, Fd} = file:open(OrgDZ, [read, binary]),
-    Access = fd_access(Fd),
+    Access = deltazip_util:fd_access(Fd),
     DZ = deltazip:open(Access),
     Datas = lists:reverse(read_loop(DZ)),
     deltazip:close(DZ),
@@ -211,11 +211,3 @@ read_loop(DZ) ->
     end.
 
 %%%======================================================================
-
-fd_access(Fd) ->
-    GetSizeFun = fun() -> {ok, Pos} = file:position(Fd, eof), Pos end,
-    PReadFun   = fun(Pos,Size) ->
-			 {ok, Data} = file:pread(Fd, Pos, Size),
-			 {ok, Data}
-		 end,
-    {GetSizeFun, PReadFun}.

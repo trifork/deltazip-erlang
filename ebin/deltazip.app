@@ -6,4 +6,4 @@
               {mod,{deltazip,[]}},
               {env,[]},
               {modules,[deltazip,deltazip_cli,deltazip_exp,deltazip_test,
-                        dittoflate,dzip_machine]}]}.
+                        deltazip_util,dittoflate,dzip_machine]}]}.
