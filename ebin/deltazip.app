@@ -1,9 +1,0 @@
-{application,deltazip,
-             [{description,[]},
-              {vsn,"1"},
-              {registered,[]},
-              {applications,[kernel,stdlib]},
-              {mod,{deltazip,[]}},
-              {env,[]},
-              {modules,[deltazip,deltazip_cli,deltazip_exp,deltazip_test,
-                        deltazip_util,dittoflate,dzip_machine]}]}.
