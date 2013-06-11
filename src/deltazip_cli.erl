@@ -39,14 +39,17 @@ interpret_command(_) ->
 
 usage() ->
     Lines =
-        ["Usage: deltazip [COMMAND] [ARGS]"
+        ["Usage: deltazip <COMMAND> ARGS..."
          , "Commands:"
-         , "  create [dzfile] [version-files] Create a deltazip archive"
-         , "  add [dzfile] [version-files]    Add versions to an archive"
-         , "  get  [dzfile]                   Print the last version"
-         , "  get @n [dzfile]                 Print the nth-last version"
-         , "  count [dzfile]                  Count the number of versions"
-         , "  list [dzfile]                   List versions and their statistics"
+         , "  create <dzfile> <version-files> Create a deltazip archive"
+         , "  add <dzfile> <version-files>    Add versions to an archive"
+         , "  get  <dzfile>                   Print the last version"
+         , "  get @n <dzfile>                 Print the nth-last version"
+         , "  count <dzfile>                  Count the number of versions"
+         , "  list <dzfile>                   List versions and their statistics"
+         , "  repack <dzfile> <newdzfile>     Recompress archive"
+         , "  split <dzfile> <file-prefix>    Split archive into files"
+         , "  rsplit <dzfile> <file-prefix>   Split archive into files, numbered in reverse"
         ],
     [io:format("~s~n", [S]) || S <- Lines].
 
