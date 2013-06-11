@@ -3,6 +3,7 @@
 
 -export([open/1, get/1, previous/1, add/2, add_multiple/2, close/1]).
 -export([stats_for_current_entry/1]).
+-export([main/1]).
 
 -record(dzstate, {get_size_fun :: fun(() -> integer()),
 		  pread_fun    :: fun((integer(),integer()) -> {ok, binary()} | {error,_}),
@@ -41,6 +42,9 @@
 -define(LIMIT_SO_DEFLATED_FITS_IN_64KB, 65000).
 
 -define(EXCLUDE_ZLIB_HEADERS, dummy). % Flag.
+
+%%%-------------------- ESCRIPT --------------------
+main(Args) -> deltazip_cli:main(Args).
 
 %%%-------------------- API --------------------
 

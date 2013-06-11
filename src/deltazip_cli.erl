@@ -32,8 +32,23 @@ interpret_command(["split", DZFile, Prefix]) ->
 interpret_command(["rsplit", DZFile, Prefix]) ->
     do_rsplit(DZFile, Prefix);
 interpret_command(["repack", OrgDZ, NewDZ]) ->
-    do_repack(OrgDZ, NewDZ).
+    do_repack(OrgDZ, NewDZ);
+interpret_command(_) ->
+    usage(),
+    init:stop(1).
 
+usage() ->
+    Lines =
+        ["Usage: deltazip [COMMAND] [ARGS]"
+         , "Commands:"
+         , "  create [dzfile] [version-files] Create a deltazip archive"
+         , "  add [dzfile] [version-files]    Add versions to an archive"
+         , "  get  [dzfile]                   Print the last version"
+         , "  get @n [dzfile]                 Print the nth-last version"
+         , "  count [dzfile]                  Count the number of versions"
+         , "  list [dzfile]                   List versions and their statistics"
+        ],
+    [io:format("~s~n", [S]) || S <- Lines].
 
 %%%======================================================================
 
