@@ -1,0 +1,7 @@
+DeltaZip is a compact file format for storing a sequence of versions of a file.
+
+By taking advantage of the redundancy in the version history, the
+sequence can be stored very compactly, compared to storing each
+version separately.
+
+See doc/DeltaZip.md for the complete documentation.
