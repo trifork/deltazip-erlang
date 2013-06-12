@@ -62,28 +62,53 @@ The Erlang implementation of DeltaZip has demonstrated an unpacking speed of ~25
 Truncating the history by deleting a number of the oldest versions is done by simply removing the corresponding number of chapters from the beginning of the archive. Because a DeltaZip archive is always accessed backwards, from the latest chapters towards the earliest, the remaining versions can be accessed just as before the deletion.
 
 ## Technical limits
-The file format in the present form only supports version sizes up to 2<sup>28</sup>-1 bytes, or 256MB.
+The file format in the present form only supports (compressed) version sizes up to 2<sup>27</sup>-1 bytes, or 128MB.
 
 ## File format details
+
+### Common types
+
+    varlen_int ::= {0:1, Bits:7}            // value is Bits
+                 | {1:1, Bits:7} varlen_int // Bits are MSB of the value.
+
+    varlen_string ::= (Length:varlen_int) (Value:byte[Length])
 
 ### Gross structure
 
     archive ::= header chapter*
     header  ::= deltazip-magic-number
-    deltazip-magic-number ::= 0xCE 0xB4 0x7A 0x10
+    deltazip-magic-number ::= 0xCE 0xB4 0x7A version
+    version ::= {major:4, minor:4}
 
+The defined versions are 1.0 and 1.1.
+
+- 1.0: Original version
+- 1.1: Added metadata-support. (Max. chapter size reduced from 256MB to 128MB.)
 
 ### Chapters
-
-    chapter     ::= chapter-tag adler data chapter-tag
-    chapter-tag ::= {Method:4, Size:28}
+    chapter     ::= chapter-tag adler metadata data chapter-tag
     adler       ::= uint32
-    data        ::= byte* // Length specified by Size
+    data        ::= byte* // Length is (Size - |metadata|)
+
+*For version 1.0:*
+
+    chapter-tag ::= {Method:4, Size:28}
+    metadata    ::= void  // Metadata not supported in 1.0
+
+*For version 1.1:*
+
+    chapter-tag ::= {Method:4, Metas:1, Size:27}
+    metadata    : See the "Chapter metadata" section.
+    metadata_item ::= (Tag:varlen_int) (MDSize:varlen_int) (MD:byte[MDSize])
+
 
 The leading and trailing chapter-tag must be identical.
 
 'Adler' is the Adler32 checksum of the (raw, uncompressed) version
 contained in the chapter.
+
+The metadata section is a key-value dictionary with integer keys. It
+is described below.
 
 The Method is a number signifying how the chapter's file version is represented.
 
@@ -107,6 +132,42 @@ The values 4-15 are used for delta-chapters:
 </table>
 
 The delta compression methods are described below.
+
+### Chapter metadata
+
+The metadata section is a key-value dictionary with integer keys and
+arbitrary byte-string values.
+
+    metadata    ::= (MetadataSize:varlen_int) metadata_item* metadata_cksum
+    metadata_item ::= metadata_keytag metadata_value
+    metadata_keytag ::= varlen_int
+    metadata_value ::= varlen_string
+    metadata_cksum ::= byte
+
+MetadataSize is the total size of the metadata_items.
+The total length of the metadata section is therefore
+1 + MetadataSize + (the size of MetadataSize itself).
+
+metadata_cksum is a rudimentary checksum; it is chosen such that the sum of
+all bytes in metadata, modulo 255, is zero. It is calculated as the
+two's complement of the modular sum of the rest of the bytes of
+metadata.
+
+#### Metadata tags
+The defined tag values are as follows:
+
+<table class="enum">
+<tr><th>Key tag</th><th>Meaning</th><th>Representation</th></tr>
+<tr><td>1</td><td>Timestamp</td><td>
+        Seconds since New Year 2000, represented as a
+        uint32 (in network order).
+</td></tr>
+<tr><td>2</td><td>Version identifier</td><td>Any byte-string.</td></tr>
+<tr><td>3</td><td>Ancestor</td><td>
+        A version identifier. Used to describe non-linear version histories.
+</td></tr>
+</table>
+
 
 ### Delta compression methods
 
@@ -190,9 +251,6 @@ Representation:
     prefix-length ::= varlen_int
     suffix-length ::= varlen_int
 
-    varlen_int ::= {0:1, Bits:7}            // value is Bits
-                 | {1:1, Bits:7} varlen_int // Bits are MSB of the value.
-
 Algorithm for "Chunked Middle":
 
     chunked_middle(prefix_length, suffix_length) {
@@ -212,9 +270,6 @@ Representation:
     chunked-middle2-chapter-data ::= prefix-length suffix-length chunked-chapter-data
     prefix-length ::= varlen_int
     suffix-length ::= varlen_int
-
-    varlen_int ::= {0:1, Bits:7}            // value is Bits
-                 | {1:1, Bits:7} varlen_int // Bits are MSB of the value.
 
 Algorithm for "Chunked Middle 2":
 
