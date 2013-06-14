@@ -218,13 +218,13 @@ test() ->
     {w1, 3, 5} = find_in_windows(<<"Hello, World">>, <<"W1: xHel">>, <<"W2: He-llo">>, <<"W3: H">>),
 
     [{original, 5, 0}, {lit, $!}] =
-	dzip_machine:compress_to_spec(<<"Hello!">>, <<"Hello, World!">>),
+	compress_to_spec(<<"Hello!">>, <<"Hello, World!">>),
 
     [{lit, $X}, {lit, $y}, {lit, $x}, {lit, $y}, {lit, $x}, {past, 4,4}, {lit, $Z}] =
-	dzip_machine:compress_to_spec(<<"XyxyxyxyxZ">>, <<>>),
+	compress_to_spec(<<"XyxyxyxyxZ">>, <<>>),
     
     [{original, 3,4}, {lit, 32}, {discards, 3,4}] = 
-	dzip_machine:compress_to_spec(<<"abc def">>, <<"def abc">>).
+	compress_to_spec(<<"abc def">>, <<"def abc">>).
 
 len2code_test() ->
     {0,0,0} = length_to_code(3),
