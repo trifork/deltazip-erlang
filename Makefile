@@ -12,4 +12,7 @@ test:
 escript: compile
 	./rebar escriptize escript_name=deltazip skip_deps=true
 
-.PHONY: all compile clean test
+dialyze: compile
+	dialyzer ebin/*.beam
+
+.PHONY: all compile clean test escript_name=deltazip dialyze
