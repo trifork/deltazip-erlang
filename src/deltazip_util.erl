@@ -26,3 +26,24 @@ replace_tail(Bin, {PrefixLength, NewTail}) when is_integer(PrefixLength), (is_bi
     NewTailBin = iolist_to_binary(NewTail),
     <<Prefix:PrefixLength/binary, _/binary>> = Bin,
     <<Prefix/binary, NewTailBin/binary>>.
+
+
+%%========== Var-length integer encoding:
+
+varlen_encode(N) when N >= 0 ->
+    varlen_encode(N, 0).
+varlen_encode(N, Flag) ->
+    Byte = (N band 16#7F) bor (Flag bsl 7),
+    Rest = N bsr 7,
+    if Rest == 0 ->
+	    [Byte];
+       true ->
+	    [varlen_encode(Rest, 1), Byte]
+    end.
+
+varlen_decode(Bin) -> varlen_decode(Bin, 0).
+varlen_decode(<<Flag:1, Bits:7, Rest/binary>>, Acc) ->
+    Acc2 = (Acc bsl 7) + Bits,
+    if Flag==0 -> {Acc2, Rest};
+       true    -> varlen_decode(Rest, Acc2)
+    end.

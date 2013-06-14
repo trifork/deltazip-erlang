@@ -5,6 +5,8 @@
 -export([stats_for_current_entry/1]).
 -export([main/1]).
 
+-import(deltazip_util, [varlen_encode/1, varlen_decode/1]).
+
 -type get_size_fun() :: fun(() -> integer()).
 -type pread_fun() :: fun((integer(),integer()) -> {ok, binary()} | {error,_}).
 -type file_tail() :: {Pos::integer(), Tail::binary()}.
@@ -476,25 +478,6 @@ take_end_chunk(MaxSize, Bin) when MaxSize < byte_size(Bin) ->
     SkipAmount = byte_size(Bin) - MaxSize,
     <<Rest:SkipAmount/binary, Chunk:MaxSize/binary>> = Bin,
     {Chunk, Rest}.
-
-
-varlen_encode(N) when N >= 0 ->
-    varlen_encode(N, 0).
-varlen_encode(N, Flag) ->
-    Byte = (N band 16#7F) bor (Flag bsl 7),
-    Rest = N bsr 7,
-    if Rest == 0 ->
-	    [Byte];
-       true ->
-	    [varlen_encode(Rest, 1), Byte]
-    end.
-
-varlen_decode(Bin) -> varlen_decode(Bin, 0).
-varlen_decode(<<Flag:1, Bits:7, Rest/binary>>, Acc) ->
-    Acc2 = (Acc bsl 7) + Bits,
-    if Flag==0 -> {Acc2, Rest};
-       true    -> varlen_decode(Rest, Acc2)
-    end.
 
 %%--------------------
 
