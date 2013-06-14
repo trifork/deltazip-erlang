@@ -5,8 +5,12 @@
 -export([stats_for_current_entry/1]).
 -export([main/1]).
 
--record(dzstate, {get_size_fun :: fun(() -> integer()),
-		  pread_fun    :: fun((integer(),integer()) -> {ok, binary()} | {error,_}),
+-type get_size_fun() :: fun(() -> integer()).
+-type pread_fun() :: fun((integer(),integer()) -> {ok, binary()} | {error,_}).
+-type file_tail() :: {Pos::integer(), Tail::binary()}.
+
+-record(dzstate, {get_size_fun :: get_size_fun(),
+		  pread_fun    :: pread_fun(),
 		  zip_handle,
 		  file_header_state :: empty | valid,
 		  current_pos :: integer(),
@@ -33,7 +37,7 @@
 %% (See http://www.zlib.net/manual.html)
 %% So we use a slightly smaller window size:
 -define(WINDOW_SIZE, 16#7E00).
--define(CHUNK_SIZE, (?WINDOW_SIZE div 2)). 
+-define(CHUNK_SIZE, (?WINDOW_SIZE div 2)).
 
 %% For when we need to ensure the deflated ouput will fit in 64KB:
 %% (From http://www.zlib.net/zlib_tech.html:
@@ -44,10 +48,12 @@
 -define(EXCLUDE_ZLIB_HEADERS, dummy). % Flag.
 
 %%%-------------------- ESCRIPT --------------------
+-spec main/1 :: ([string()]) -> any().
 main(Args) -> deltazip_cli:main(Args).
 
 %%%-------------------- API --------------------
 
+-spec open/1 :: ({get_size_fun(), pread_fun()}) -> #dzstate{} | {error,_}.
 open(_Access={GetSizeFun, PReadFun}) when is_function(GetSizeFun,0),
 				is_function(PReadFun,2) ->
     Z = zlib:open(),
@@ -62,10 +68,12 @@ open(_Access={GetSizeFun, PReadFun}) when is_function(GetSizeFun,0),
 	    State2#dzstate{current_version = file_is_empty}
     end.
 
+-spec get/1 :: (#dzstate{}) -> binary() | file_is_empty.
 get(#dzstate{current_version=Bin}) ->
 %%     io:format("DB| get @ ~p: ~p\n", [S#dzstate.current_pos, Bin]), 
     Bin.
 
+-spec stats_for_current_entry/1 :: (#dzstate{}) -> {integer(), integer(), integer()}.
 stats_for_current_entry(#dzstate{current_method=M,
 				 current_size=Sz,
 				 current_checksum=Ck}) ->
@@ -77,9 +85,11 @@ previous(#dzstate{current_pos=CP}) when CP =< ?FILE_HEADER_LENGTH ->
 previous(State) ->
     {ok, compute_current_version(goto_previous_position(State))}.
 
+-spec add/2 :: (#dzstate{}, binary()) -> file_tail().
 add(State, NewRev) ->
     add_multiple(State, [NewRev]).
 
+-spec add_multiple/2 :: (#dzstate{}, [binary()]) -> file_tail().
 add_multiple(State, NewRevs) ->
     opt_prepend_file_header_to_append_spec(State, add_multiple2(State, NewRevs)).
 
@@ -95,6 +105,7 @@ add_multiple2(State, NewRevs) ->
 	    {PrefixLength, NewTail}
     end.
 
+-spec close/1 :: (#dzstate{}) -> any().
 close(#dzstate{zip_handle=Z}) ->
     zlib:close(Z).
 
