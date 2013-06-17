@@ -1,7 +1,8 @@
 -module(deltazip).
 -compile(export_all).
 
--export([open/1, get/1, previous/1, add/2, add_multiple/2, close/1]).
+-export([open/1, previous/1, add/2, add_multiple/2, close/1]).
+-export([get/1, get_data/1, get_metadata/1]).
 -export([stats_for_current_entry/1]).
 -export([main/1]).
 
@@ -83,10 +84,24 @@ open(_Access={GetSizeFun, PReadFun}) when is_function(GetSizeFun,0),
 	    State2#dzstate{current_version = file_is_empty}
     end.
 
--spec get/1 :: (#dzstate{}) -> binary() | file_is_empty.
-get(#dzstate{current_version=Bin}) ->
-%%     io:format("DB| get @ ~p: ~p\n", [S#dzstate.current_pos, Bin]), 
-    Bin.
+%%%---------- Version getters:
+
+-spec get/1 :: (#dzstate{}) -> file_is_empty | {binary(), metadata()}.
+get(#dzstate{current_version=Data, current_metadata=Metadata}) ->
+    if Data==file_is_empty -> file_is_empty;
+       true -> {Data, Metadata}
+    end.
+
+-spec get_data/1 :: (#dzstate{}) -> binary() | file_is_empty.
+get_data(#dzstate{current_version=Data}) -> Data.
+
+-spec get_metadata/1 :: (#dzstate{}) -> file_is_empty | metadata().
+get_metadata(#dzstate{current_version=Data, current_metadata=Metadata}) ->
+    if Data==file_is_empty -> file_is_empty;
+       true -> Metadata
+    end.
+
+%%%--------------------
 
 -spec stats_for_current_entry/1 :: (#dzstate{}) -> {integer(), integer(), integer()}.
 stats_for_current_entry(#dzstate{current_method=M,

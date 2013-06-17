@@ -8,7 +8,7 @@ empty_test() ->
     Access0 = access(Bin0),
 
     DZa = deltazip:open(Access0),
-    file_is_empty = deltazip:get(DZa),
+    file_is_empty = deltazip:get_data(DZa),
     {error, at_beginning} = deltazip:previous(DZa),
     deltazip:close(DZa).
 
@@ -24,7 +24,7 @@ one_rev_test() ->
     
     Access1 = access(Bin1),
     DZb = deltazip:open(Access1),
-    Rev1 = deltazip:get(DZb), % assertion
+    Rev1 = deltazip:get_data(DZb), % assertion
     {error, at_beginning} = deltazip:previous(DZb),
     deltazip:close(DZb).
     
@@ -43,7 +43,7 @@ two_revs_test() ->
     %% Check that Rev1 was added.
     Access1 = access(Bin1),
     DZb = deltazip:open(Access1),
-    Rev1 = deltazip:get(DZb), % assertion
+    Rev1 = deltazip:get_data(DZb), % assertion
     {error, at_beginning} = deltazip:previous(DZb),
 
     %% Add Rev2.
@@ -55,9 +55,9 @@ two_revs_test() ->
     %% Check that Rev2 was added - and that both Rev1 and Rev2 can be accessed.
     Access2 = access(Bin2),
     DZc = deltazip:open(Access2),
-    Rev2 = deltazip:get(DZc), % assertion
+    Rev2 = deltazip:get_data(DZc), % assertion
     {ok,DZc2} = deltazip:previous(DZc),
-    Rev1 = deltazip:get(DZc2), % assertion
+    Rev1 = deltazip:get_data(DZc2), % assertion
     {error, at_beginning} = deltazip:previous(DZc2),
     deltazip:close(DZc2).
     
@@ -181,7 +181,7 @@ test_batches([Batch|Batches], OldRevs, Bin) ->
 
 verify_history(DZ, OldRevs) ->
     DZrewind = lists:foldl(fun(OldRev,LocalDZ) ->
-				   Gotten = deltazip:get(LocalDZ),
+				   Gotten = deltazip:get_data(LocalDZ),
 				   {true,_} = {OldRev == Gotten, Gotten},
 				   case deltazip:previous(LocalDZ) of
 				       {ok, LocalDZ2} -> LocalDZ2;
