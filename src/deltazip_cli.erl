@@ -57,9 +57,60 @@ usage() ->
 
 %%%----------
 do_create(DZFile, InputFiles) ->
-    Datas = [begin {ok,D} = file:read_file(F), D end
-	     || F <- InputFiles],
-    do_create2(DZFile, Datas).
+    ItemSpecs = parse_file_list(InputFiles, [], true),
+    Items = [begin {ok,D} = file:read_file(F), {D,MD} end
+	     || {F,MD} <- ItemSpecs],
+    do_create2(DZFile, Items).
+
+parse_file_list([], _MDAcc, _AllowMetas) -> [];
+parse_file_list(["--" | Rest], MDAcc, true) ->
+    %% Stop recognizing metadata parameters.
+    parse_file_list(Rest, MDAcc, false);
+parse_file_list(["-m"++MetadataSpec | Rest], MDAcc, true=AllowMetas) ->
+    MDItem = parse_metadata_spec(MetadataSpec),
+    parse_file_list(Rest, [MDItem | MDAcc], AllowMetas);
+parse_file_list([Filename | Rest], MDAcc, AllowMetas) ->
+    [{Filename, MDAcc}
+     | parse_file_list(Rest, [], AllowMetas)].
+
+parse_metadata_spec(MetadataSpec) ->
+    case re:run(MetadataSpec, "(.*?)=(.*)", [{capture, all_but_first, list}]) of
+        {match, [KeyStr, ValueStr]} ->
+            parse_specific_metadata(KeyStr, ValueStr);
+        _ ->
+            error({bad_metadata_specification, MetadataSpec})
+    end.
+
+parse_specific_metadata("timestamp", ValueStr) ->
+    case ValueStr of
+        "now" ->
+            {timestamp, erlang:universaltime()};
+        "+"++TSStr -> % Unix time input
+            UnixTime = list_to_integer(TSStr),
+            GregSecs = calendar:datetime_to_gregorian_seconds({{1970,1,1},{0,0,0}}) + UnixTime,
+            Datetime = calendar:gregorian_seconds_to_datetime(GregSecs),
+            {timestamp, Datetime};
+        TSStr ->
+            case io_lib:fread("~4d-~2d-~2d ~2d:~2d:~2d", TSStr) of
+                {ok, [Y,Mo,D, H,Mi,S],  []} ->
+                    Datetime = {{Y,Mo,D}, {H,Mi,S}},
+                    {timestamp, Datetime};
+                _ ->
+                    error({bad_timestamp_format, TSStr})
+            end
+    end;
+parse_specific_metadata("versionid", ValueStr) ->
+    {version_id, ValueStr};
+parse_specific_metadata("ancestor", ValueStr) ->
+    {ancestor, ValueStr};
+parse_specific_metadata(Key, ValueStr) ->
+    try list_to_integer(Key) of
+        KeyTag ->
+            {KeyTag, ValueStr}
+    catch error:_ ->
+            error({invalid_metadata_key, Key})
+    end.
+
 
 do_create2(DZFile, Datas) ->
     {ok, Fd} = file:open(DZFile, [write, exclusive, binary]),
