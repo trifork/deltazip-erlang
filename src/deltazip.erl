@@ -7,12 +7,14 @@
 
 -import(deltazip_util, [varlen_encode/1, varlen_decode/1]).
 
+-type file_format_version() :: {Major::byte(), Minor::byte()}.
 -type get_size_fun() :: fun(() -> integer()).
 -type pread_fun() :: fun((integer(),integer()) -> {ok, binary()} | {error,_}).
 -type file_tail() :: {Pos::integer(), Tail::binary()}.
 
 -record(dzstate, {get_size_fun :: get_size_fun(),
 		  pread_fun    :: pread_fun(),
+                  format_version :: file_format_version(),
 		  zip_handle,
 		  file_header_state :: empty | valid,
 		  current_pos :: integer(),
@@ -22,8 +24,11 @@
 		  current_checksum :: integer()
 		 }).
 
--define(DELTAZIP_MAGIC_HEADER, <<16#CEB47A10:32/big>>). 
--define(FILE_HEADER_LENGTH, 4). 
+-define(DELTAZIP_MAGIC_HEADER, 16#CEB47A).
+-define(DEFAULT_VERSION_MAJOR, 1).
+-define(DEFAULT_VERSION_MINOR, 1).
+
+-define(FILE_HEADER_LENGTH, 4).
 
 %% Snapshot methods (0-3):
 -define(METHOD_UNCOMPRESSED,   0).
@@ -115,11 +120,30 @@ close(#dzstate{zip_handle=Z}) ->
 
 check_magic_header(State) ->
     case magic_header_state(State) of
-	invalid     -> error(not_a_deltazip_file);
-	HeaderState -> State#dzstate{file_header_state=HeaderState}
+	invalid ->
+            error(not_a_deltazip_file),
+            HeaderState = FormatVersion = dummy;
+        empty ->
+            HeaderState = empty,
+            FormatVersion = {?DEFAULT_VERSION_MAJOR, ?DEFAULT_VERSION_MINOR};
+        {valid, Major, Minor} ->
+            verify_deltazip_version_is_supported(Major, Minor),
+            HeaderState = valid,
+            FormatVersion = {Major, Minor}
+    end,
+    State#dzstate{file_header_state=HeaderState,
+                  format_version=FormatVersion}.
+
+verify_deltazip_version_is_supported(Major, Minor) ->
+    if Major == 1,
+       Minor >= 0, Minor =< 1 ->
+            ok;
+       true ->
+            error({unsupported_deltazip_version, Major, Minor})
     end.
 
--spec(magic_header_state/1 :: (#dzstate{}) -> empty | invalid | valid).
+
+-spec(magic_header_state/1 :: (#dzstate{}) -> empty | invalid | {valid,byte(),byte()}).
 magic_header_state(#dzstate{get_size_fun=GetSizeFun,
 			    pread_fun=PReadFun}) ->
     Size = GetSizeFun(),
@@ -129,8 +153,9 @@ magic_header_state(#dzstate{get_size_fun=GetSizeFun,
 	    invalid;
        Size >= 4 ->
 	    case PReadFun(0,4) of
-		{ok,Header} when Header == ?DELTAZIP_MAGIC_HEADER ->
-		    valid;
+		{ok,<<Magic:24, Major:4, Minor:4>>}
+                  when Magic == ?DELTAZIP_MAGIC_HEADER ->
+		    {valid, Major, Minor};
 		_ ->
 		    invalid
 	    end
@@ -176,7 +201,10 @@ pack_multiple([Data | [NextData|_]=Rest], Z) ->
 opt_prepend_file_header_to_append_spec(State, AppendSpec={Pos,Tail}) ->
     case State#dzstate.file_header_state of
 	valid -> AppendSpec;
-	empty when Pos == 0 -> {Pos, [?DELTAZIP_MAGIC_HEADER | Tail]}
+	empty when Pos == 0 ->
+            {Pos, [<<?DELTAZIP_MAGIC_HEADER:24/big,
+                     ?DEFAULT_VERSION_MAJOR:4, ?DEFAULT_VERSION_MINOR:4>>
+                       | Tail]}
     end.
 
 %%%----------

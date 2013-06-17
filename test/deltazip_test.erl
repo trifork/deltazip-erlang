@@ -64,11 +64,30 @@ two_revs_test() ->
 
 header_check_test() ->
     Bin1 = <<"DATA">>,
-    Bin2 = <<"123">>,
-    {'EXIT', {not_a_deltazip_file, _}} =
-	(catch {ok, deltazip:open(access(Bin1))}),
-    {'EXIT', {not_a_deltazip_file, _}} =
-	(catch {ok, deltazip:open(access(Bin2))}),
+    Bin2 = <<"123">>, % Too short even for magic
+    ?assertMatch({'EXIT', {not_a_deltazip_file, _}},
+                 catch {ok, deltazip:open(access(Bin1))}),
+    ?assertMatch({'EXIT', {not_a_deltazip_file, _}},
+                 catch {ok, deltazip:open(access(Bin2))}),
+
+    %% "Unsupported version" tests:
+    Bin3a = <<16#CEB47A:24, 0:4, 0:4>>,
+    Bin3b = <<16#CEB47A:24, 1:4, 2:4>>,
+    Bin3c = <<16#CEB47A:24, 2:4, 0:4>>,
+    [begin
+         {'EXIT', {{unsupported_deltazip_version, Maj,Min},_}} =
+             (catch {ok, deltazip:open(access(B))}),
+         ?assertEqual({Major,Minor}, {Maj,Min})
+     end
+     || {B,Major,Minor} <- [{Bin3a,0,0},
+                            {Bin3b,1,2},
+                            {Bin3c,2,0}]],
+
+    %% Good case tests:
+    Bin4a = <<16#CEB47A:24, 1:4, 0:4>>,
+    Bin4b = <<16#CEB47A:24, 1:4, 1:4>>,
+    [?assertMatch({ok,_}, catch {ok, deltazip:open(access(B))})
+     || B <- [Bin4a, Bin4b]],
     ok.
 
 random_test_() ->
