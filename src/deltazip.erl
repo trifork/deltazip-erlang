@@ -129,10 +129,11 @@ add_multiple2(State, NewRevs) ->
 	{error, at_beginning} ->
 	    Z = State#dzstate.zip_handle,
 	    {0, pack_multiple(NewRevs, Z, FormatVersion)};
-	{ok, #dzstate{current_version = LastRev,
+	{ok, #dzstate{current_version = LastData,
+                      current_metadata = LastMD,
 		      current_pos = PrefixLength,
 		      zip_handle = Z}} ->
-            %% TODO: Handle metadata of LastRev.
+            LastRev = {LastData, LastMD},
 	    NewTail = pack_multiple([LastRev | NewRevs], Z, FormatVersion),
 	    {PrefixLength, NewTail}
     end.
