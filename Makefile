@@ -9,6 +9,9 @@ clean:
 test:
 	./rebar eunit skip_deps=true
 
+test.suite.%:
+	./rebar eunit skip_deps=true suite="$*"
+
 escript: compile
 	./rebar escriptize escript_name=deltazip skip_deps=true
 
