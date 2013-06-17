@@ -12,6 +12,12 @@
 -type pread_fun() :: fun((integer(),integer()) -> {ok, binary()} | {error,_}).
 -type file_tail() :: {Pos::integer(), Tail::binary()}.
 
+-type metadata_keytag() :: atom() | integer().
+-type metadata_item() :: {metadata_keytag(), _}.
+-type metadata() :: [metadata_item()].
+
+-type version_to_add() :: [binary() | {binary(), metadata()}].
+
 -record(dzstate, {get_size_fun :: get_size_fun(),
 		  pread_fun    :: pread_fun(),
                   format_version :: file_format_version(),
@@ -20,6 +26,8 @@
 		  current_pos :: integer(),
 		  current_size :: integer(),
 		  current_method :: integer(),
+                  current_has_meta :: boolean(),
+                  current_metadata :: metadata(),
 		  current_version :: binary() | file_is_empty,
 		  current_checksum :: integer()
 		 }).
@@ -92,23 +100,25 @@ previous(#dzstate{current_pos=CP}) when CP =< ?FILE_HEADER_LENGTH ->
 previous(State) ->
     {ok, compute_current_version(goto_previous_position(State))}.
 
--spec add/2 :: (#dzstate{}, binary()) -> file_tail().
+-spec add/2 :: (#dzstate{}, version_to_add()) -> file_tail().
 add(State, NewRev) ->
     add_multiple(State, [NewRev]).
 
--spec add_multiple/2 :: (#dzstate{}, [binary()]) -> file_tail().
+-spec add_multiple/2 :: (#dzstate{}, [version_to_add()]) -> file_tail().
 add_multiple(State, NewRevs) ->
     opt_prepend_file_header_to_append_spec(State, add_multiple2(State, NewRevs)).
 
 add_multiple2(State, NewRevs) ->
+    FormatVersion = State#dzstate.format_version,
     case previous(set_initial_position(State)) of
 	{error, at_beginning} ->
 	    Z = State#dzstate.zip_handle,
-	    {0, pack_multiple(NewRevs, Z)};
+	    {0, pack_multiple(NewRevs, Z, FormatVersion)};
 	{ok, #dzstate{current_version = LastRev,
 		      current_pos = PrefixLength,
 		      zip_handle = Z}} ->
-	    NewTail = pack_multiple([LastRev | NewRevs], Z),
+            %% TODO: Handle metadata of LastRev.
+	    NewTail = pack_multiple([LastRev | NewRevs], Z, FormatVersion),
 	    {PrefixLength, NewTail}
     end.
 
@@ -165,8 +175,16 @@ set_initial_position(State=#dzstate{get_size_fun=GetSizeFun}) ->
     State#dzstate{current_pos=GetSizeFun()}.
 
 -define(ENVELOPE_OVERHEAD, (4+4+4)). % Start-tag, checksum, end-tag.
-goto_previous_position(State=#dzstate{current_pos=Pos}) ->
-    <<Method:4, Size:28>>=Tag = safe_pread(State, Pos-4, 4),
+goto_previous_position(State=#dzstate{current_pos=Pos}=State) ->
+    Tag = safe_pread(State, Pos-4, 4),
+    case is_version_after(State#dzstate.format_version, 1,1) of
+        true ->
+            <<Method:4, HasMeta0:1, Size:27>> = Tag,
+            HasMeta = HasMeta0>0;
+        false ->
+            <<Method:4, Size:28>> = Tag,
+            HasMeta = false
+    end,
     PrevPos = Pos - Size - ?ENVELOPE_OVERHEAD,
     TagBefore = safe_pread(State, PrevPos, 4),
     if TagBefore /= Tag ->
@@ -175,28 +193,56 @@ goto_previous_position(State=#dzstate{current_pos=Pos}) ->
        true ->
 	    State#dzstate{current_method=Method,
 			  current_size=Size,
-			  current_pos=PrevPos}
+			  current_pos=PrevPos,
+                          current_has_meta=HasMeta}
     end.
 
 compute_current_version(State=#dzstate{current_pos=Pos,
 				       current_size=Size,
+                                       current_has_meta=HasMeta,
 				       current_method=Method}) ->
-    <<Adler32:32/unsigned, Bin/binary>> = safe_pread(State, Pos+4, Size+4),
-    Version = unpack_entry(State, Method,Bin),
+    <<Adler32:32/unsigned>> = safe_pread(State, Pos+4, 4),
+    case HasMeta of
+        false ->
+            MetadataSize = 0,
+            Metadata = [];
+        true ->
+            ReadFun = fun(P,S) -> safe_pread(State, P, S) end,
+            {Metadata, MetadataSize} =
+                deltazip_metadata:read(ReadFun, Pos + 8)
+    end,
+    DataSize = Size - MetadataSize,
+    DataPos = Pos + 8 + MetadataSize,
+    <<PackedVersion/binary>> = safe_pread(State, DataPos, DataSize),
+    Version = unpack_entry(State, Method, PackedVersion),
     ActualAdler = erlang:adler32(Version),
     if ActualAdler /= Adler32 -> error({checksum_mismatch,Adler32,ActualAdler});
        true -> ok
     end,
     State#dzstate{current_version = Version,
+                  current_metadata = Metadata,
 		  current_checksum = ActualAdler}.
 
-pack_multiple([], _Z) ->
+
+pack_multiple([], _Z, _FormatVersion) ->
     [];
-pack_multiple([Data], Z) ->
-    envelope(Data, select_method_and_pack_snapshot(Data, Z));
-pack_multiple([Data | [NextData|_]=Rest], Z) ->
-    [envelope(Data, select_method_and_pack_delta(Data, NextData, Z))
-     | pack_multiple(Rest, Z)].
+pack_multiple([Item | RestData], Z, FormatVersion) ->
+    {Data, Metadata} = version_to_data_and_metadata(Item),
+    PackedData = case RestData of
+                     [] ->
+                         select_method_and_pack_snapshot(Data, Z);
+                     [NextItem|_] ->
+                         {NextData,_} = version_to_data_and_metadata(NextItem),
+                         select_method_and_pack_delta(Data, NextData, Z)
+                 end,
+    [envelope(FormatVersion, Metadata, Data, PackedData)
+     | pack_multiple(RestData, Z, FormatVersion)].
+
+version_to_data_and_metadata(Data) when is_binary(Data) ->
+    {Data, []};
+version_to_data_and_metadata({Data,MD}) when is_binary(Data), is_list(MD) ->
+    {Data,MD}.
+
 
 opt_prepend_file_header_to_append_spec(State, AppendSpec={Pos,Tail}) ->
     case State#dzstate.file_header_state of
@@ -221,13 +267,32 @@ safe_pread(#dzstate{pread_fun=PReadFun}, Pos, Size) ->
 	    end
     end.    
 
-envelope(RawVersion, {Method, Data0}) ->
+envelope(FormatVersion, Metadata, RawVersion, {Method, Data0}) ->
     Data = iolist_to_binary(Data0),
     Sz = byte_size(Data),
 %%     io:format("DB| envelope: method=~p  size=~p\n", [Method, Sz]),
-    Tag = <<Method:4, Sz:28>>,
+    HasMeta = Metadata/=[],
+    case is_version_after(FormatVersion, 1,1) of
+        true ->
+            if HasMeta ->
+                    HasMetaInt = 1,
+                    PackedMetadata = deltazip_metadata:pack(Metadata);
+               true ->
+                    HasMetaInt = 0,
+                    PackedMetadata = <<>>
+            end,
+
+            Sz2 = Sz + iolist_size(PackedMetadata),
+            Tag = <<Method:4, HasMetaInt:1, Sz2:27>>;
+        false ->
+            HasMeta==false orelse
+                error({'versions_before_1.1_do_not_support_metadata',
+                       FormatVersion, Metadata}),
+            PackedMetadata = <<>>,
+            Tag = <<Method:4, Sz:28>>
+    end,
     Adler32 = <<(erlang:adler32(RawVersion)):32>>,
-    [Tag, Adler32, Data, Tag].
+    [Tag, Adler32, PackedMetadata, Data, Tag].
 
 %%%-------------------- Methods -------------------
 unpack_entry(State, Method, Data) ->
@@ -506,6 +571,9 @@ take_end_chunk(MaxSize, Bin) when MaxSize < byte_size(Bin) ->
     SkipAmount = byte_size(Bin) - MaxSize,
     <<Rest:SkipAmount/binary, Chunk:MaxSize/binary>> = Bin,
     {Chunk, Rest}.
+
+is_version_after(Version={_,_}, Major, Minor) ->
+    Version >= {Major, Minor}.
 
 %%--------------------
 

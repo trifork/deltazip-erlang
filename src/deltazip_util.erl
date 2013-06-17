@@ -22,7 +22,7 @@ bin_access(Bin) ->
     {GetSizeFun, PReadFun}.
 
 	     
-replace_tail(Bin, {PrefixLength, NewTail}) when is_integer(PrefixLength), (is_binary(NewTail) or is_list(NewTail)) ->
+bin_replace_tail(Bin, {PrefixLength, NewTail}) when is_integer(PrefixLength), (is_binary(NewTail) or is_list(NewTail)) ->
     NewTailBin = iolist_to_binary(NewTail),
     <<Prefix:PrefixLength/binary, _/binary>> = Bin,
     <<Prefix/binary, NewTailBin/binary>>.

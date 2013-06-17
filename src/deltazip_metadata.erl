@@ -1,6 +1,6 @@
 -module(deltazip_metadata).
 
--export([parse/2]).
+-export([read/2, pack/1]).
 -export([encode_symbolic/1, decode_symbolic/1]).
 
 -define(TIMESTAMP_KEYTAG,  1).
@@ -14,8 +14,21 @@
 
 %%======================================================================
 
-parse(ReadFun, StartPos) when is_function(ReadFun,2),
-                              is_integer(StartPos) ->
+pack(Items) ->
+    UnSymbolicItems = [encode_symbolic(X) || X <- Items],
+    PackedItems = [ [deltazip_util:varlen_encode(K),
+                     deltazip_util:varlen_encode(byte_size(V)),
+                     V]
+                    || {K,V} <- UnSymbolicItems],
+    ItemsTotalSize = iolist_size(PackedItems),
+    Contents0 = [deltazip_util:varlen_encode(ItemsTotalSize) | PackedItems],
+
+    %% Add checksum:
+    Contents = iolist_to_binary(Contents0),
+    [Contents, compute_mod255_checksum(Contents)].
+
+read(ReadFun, StartPos) when is_function(ReadFun,2),
+                             is_integer(StartPos) ->
     VarlenReadSize = 5,
     MDSizeBin = ReadFun(StartPos, VarlenReadSize),
     {MDSize, RestAfterMDSize} = deltazip_util:varlen_decode(MDSizeBin),
@@ -25,11 +38,11 @@ parse(ReadFun, StartPos) when is_function(ReadFun,2),
     %% Read the metadata:
     <<MDBin:MDSize/binary, ExpectedCksum>> =
         ReadFun(StartPos+MDSizeLen, MDSize+1),
-    TotalMDSize = StartPos + MDSizeLen + MDSize + 1,
+    TotalMDSize = MDSizeLen + MDSize + 1,
     Items = parse_metadata_items(MDBin, []),
 
     %% Verify checksum:
-    <<MDSizeSrc:MDSizeLen/binary>> = MDSizeBin,
+    <<MDSizeSrc:MDSizeLen/binary, _/binary>> = MDSizeBin,
     ActualCksum = compute_mod255_checksum(<<MDSizeSrc/binary, MDBin/binary>>),
     if ActualCksum =:= ExpectedCksum ->
             ok;
@@ -55,7 +68,7 @@ parse_metadata_items(<<>>, Acc) ->
 parse_metadata_items(Bin, Acc) ->
     {KeyTagInt, Rest1} = deltazip_util:varlen_decode(Bin),
     {ValueLength, Rest2} = deltazip_util:varlen_decode(Rest1),
-    <<Value:ValueLength/binary, Rest3>> = Rest2,
+    <<Value:ValueLength/binary, Rest3/binary>> = Rest2,
     Item = decode_symbolic({KeyTagInt, Value}),
     parse_metadata_items(Rest3, [Item | Acc]).
 
@@ -71,7 +84,7 @@ parse_metadata_items(Bin, Acc) ->
 encode_symbolic({timestamp, DateTime}) ->
     SecondsSinceY2K = calendar:datetime_to_gregorian_seconds(DateTime)
         - ?START_OF_YEAR_2000_IN_GREGORIAN_SECONDS,
-    {?TIMESTAMP_KEYTAG, SecondsSinceY2K};
+    {?TIMESTAMP_KEYTAG, <<SecondsSinceY2K:32>>};
 encode_symbolic({version_id, VersionID}) ->
     {?VERSION_ID_KEYTAG, iolist_to_binary(VersionID)};
 encode_symbolic({ancestor, AncestorVersionID}) ->
@@ -84,7 +97,7 @@ encode_symbolic({KeyTag, Value}) when is_integer(KeyTag) ->
                                    {version_id, iolist()} |
                                    {ancestor, iolist()} |
                                    {integer(), iolist()}.
-decode_symbolic({?TIMESTAMP_KEYTAG, SecondsSinceY2K}) ->
+decode_symbolic({?TIMESTAMP_KEYTAG, <<SecondsSinceY2K:32>>}) ->
     GregSecs = SecondsSinceY2K + ?START_OF_YEAR_2000_IN_GREGORIAN_SECONDS,
     {timestamp, calendar:gregorian_seconds_to_datetime(GregSecs)};
 decode_symbolic({?VERSION_ID_KEYTAG, VersionID}) ->
@@ -93,9 +106,6 @@ decode_symbolic({?ANCESTOR_KEYTAG, AncestorVersionID}) ->
     {ancestor, AncestorVersionID};
 decode_symbolic({KeyTag, Value}) when is_integer(KeyTag), is_binary(Value) ->
     {KeyTag, Value}.
-
-%% pack({KeyTag, Value}) ->
-    
 
 
 -ifdef(TEST).
