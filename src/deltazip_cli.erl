@@ -111,9 +111,10 @@ do_get(DZFile, Nr) ->
 	    io:format(standard_error, "No version ~p exists\n", [Nr]),
 	    put(exit_code, 1);
        true ->
-	    Data = deltazip:get(DZ2),
+	    {Data,_MD} = deltazip:get(DZ2),
 	    deltazip:close(DZ2),
 	    ok = file:close(Fd),
+            %% TODO: Print metadata
 	    io:format("~s", [Data]) % TODO: Is non-ascii data handled correctly?
     end.
 
@@ -157,7 +158,7 @@ print_entry_stats(DZ) ->
     
 print_entry_stats(DZ, Nr) ->
     {Method,CompSize,Checksum} = deltazip:stats_for_current_entry(DZ),
-    UncompSize = byte_size(deltazip:get(DZ)),
+    UncompSize = byte_size(deltazip:get_data(DZ)),
     io:format("~b:\tM~b\t~8b\t~8b\t~8.16b\n", [-Nr, Method, CompSize, UncompSize, Checksum]),
     case deltazip:previous(DZ) of
 	{ok, DZ2} -> print_entry_stats(DZ2, Nr+1);
@@ -175,7 +176,7 @@ do_split(DZFile, Prefix) ->
 
 
 split_loop(DZ, Prefix, Nr) ->
-    case deltazip:get(DZ) of
+    case deltazip:get_data(DZ) of
 	file_is_empty -> 0;
 	Data ->
 	    FileName = lists:flatten(io_lib:format("~s~4..0b", [Prefix, Nr])),
@@ -197,7 +198,7 @@ do_rsplit(DZFile, Prefix) ->
 
 
 rsplit_loop(DZ, Prefix, Nr) ->
-    case deltazip:get(DZ) of
+    case deltazip:get_data(DZ) of
 	file_is_empty -> 0;
 	Data ->
 	    FileName = lists:flatten(io_lib:format("~s~4..0b", [Prefix, Nr])),
@@ -213,16 +214,16 @@ do_repack(OrgDZ, NewDZ) ->
     {ok, Fd} = file:open(OrgDZ, [read, binary]),
     Access = deltazip_util:fd_access(Fd),
     DZ = deltazip:open(Access),
-    Datas = lists:reverse(read_loop(DZ)),
+    Items = lists:reverse(read_loop(DZ)),
     deltazip:close(DZ),
     ok = file:close(Fd),
-    do_create2(NewDZ, Datas).
+    do_create2(NewDZ, Items).
 
 read_loop(DZ) ->
     case deltazip:get(DZ) of
 	file_is_empty -> [];
-	Data ->
-	    [Data | case deltazip:previous(DZ) of
+	Item ->
+	    [Item | case deltazip:previous(DZ) of
 			{ok, DZ2} -> read_loop(DZ2);
 			{error, at_beginning} -> []
 		    end]
