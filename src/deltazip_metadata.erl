@@ -25,7 +25,7 @@ pack(Items) ->
 
     %% Add checksum:
     Contents = iolist_to_binary(Contents0),
-    [Contents, compute_mod255_checksum(Contents)].
+    [Contents, 255-compute_mod255_checksum(Contents)].
 
 read(ReadFun, StartPos) when is_function(ReadFun,2),
                              is_integer(StartPos) ->
@@ -43,12 +43,12 @@ read(ReadFun, StartPos) when is_function(ReadFun,2),
 
     %% Verify checksum:
     <<MDSizeSrc:MDSizeLen/binary, _/binary>> = MDSizeBin,
-    ActualCksum = compute_mod255_checksum(<<MDSizeSrc/binary, MDBin/binary>>),
-    if ActualCksum =:= ExpectedCksum ->
+    ActualCksum = compute_mod255_checksum(<<MDSizeSrc/binary, MDBin/binary, ExpectedCksum>>),
+    if ActualCksum =:= 0 ->
             ok;
        true ->
             error({metadata_checksum_error, [{actual, ActualCksum},
-                                             {expected, ExpectedCksum}]})
+                                             {expected, 0}]})
     end,
     {Items, TotalMDSize}.
 
