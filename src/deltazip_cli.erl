@@ -70,7 +70,7 @@ parse_file_list(["-m"++MetadataSpec | Rest], MDAcc, true=AllowMetas) ->
     MDItem = parse_metadata_spec(MetadataSpec),
     parse_file_list(Rest, [MDItem | MDAcc], AllowMetas);
 parse_file_list([Filename | Rest], MDAcc, AllowMetas) ->
-    [{Filename, MDAcc}
+    [{Filename, lists:reverse(MDAcc)}
      | parse_file_list(Rest, [], AllowMetas)].
 
 parse_metadata_spec(MetadataSpec) ->
@@ -99,7 +99,7 @@ parse_specific_metadata("timestamp", ValueStr) ->
                     error({bad_timestamp_format, TSStr})
             end
     end;
-parse_specific_metadata("versionid", ValueStr) ->
+parse_specific_metadata("version_id", ValueStr) ->
     {version_id, ValueStr};
 parse_specific_metadata("ancestor", ValueStr) ->
     {ancestor, ValueStr};
@@ -201,7 +201,8 @@ do_list(DZFile) ->
     ok = file:close(Fd).
 
 print_entry_stats(DZ) ->
-    io:format("~s:\t~s\t~s\t~s\t~s\n", ["Nr", "Method", "CompSize", "VersionSize", "Checksum"]),
+    io:format("~s:\t~s\t~s\t~s\t~s\t~s\n",
+              ["Nr", "Method", "CompSize", "VersionSize", "Checksum", "Metadata"]),
     case deltazip:get(DZ) of
 	file_is_empty -> 0;
 	_ -> print_entry_stats(DZ, 0)
@@ -210,11 +211,30 @@ print_entry_stats(DZ) ->
 print_entry_stats(DZ, Nr) ->
     {Method,CompSize,Checksum} = deltazip:stats_for_current_entry(DZ),
     UncompSize = byte_size(deltazip:get_data(DZ)),
-    io:format("~b:\tM~b\t~8b\t~8b\t~8.16b\n", [-Nr, Method, CompSize, UncompSize, Checksum]),
+    Metadata = deltazip:get_metadata(DZ),
+    MetadataStr = stringify_metadata(Metadata),
+    io:format("~b:\tM~b\t~8b\t~8b\t~8.16b\t~s\n",
+              [-Nr, Method, CompSize, UncompSize, Checksum, MetadataStr]),
     case deltazip:previous(DZ) of
 	{ok, DZ2} -> print_entry_stats(DZ2, Nr+1);
 	{error, at_beginning} -> ok
     end.
+
+stringify_metadata(Metadata) ->
+    L = lists:map(fun({K,V}) ->
+                          KStr = if is_integer(K) -> integer_to_list(K);
+                                    is_atom(K)    -> atom_to_list(K)
+                                 end,
+                          VStr = stringify_metadata_value(K,V),
+                          [KStr, "=\"", VStr, "\""]
+                  end, Metadata),
+    string:join(L, "; ").
+
+stringify_metadata_value(timestamp, {{Y,Mo,D},{H,Mi,S}}) ->
+    io_lib:format("~4b-~2..0b-~2..0b ~2..0b:~2..0b:~2..0b", [Y,Mo,D,H,Mi,S]);
+stringify_metadata_value(_, Value) ->
+    Value.
+
 
 %%%----------
 do_split(DZFile, Prefix) ->
