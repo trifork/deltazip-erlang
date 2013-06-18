@@ -1,5 +1,8 @@
 *.beam
+*.app
 *.dump
 *~
 .eunit/
 *.dz
+/deltazip
+doc/*.html
