@@ -3,6 +3,8 @@
 -export([read/2, pack/1]).
 -export([encode_symbolic/1, decode_symbolic/1]).
 
+-import(deltazip_iutil, [varlen_encode/1, varlen_decode/1]).
+
 -define(TIMESTAMP_KEYTAG,  1).
 -define(VERSION_ID_KEYTAG, 2).
 -define(ANCESTOR_KEYTAG,   3).
@@ -16,12 +18,12 @@
 
 pack(Items) ->
     UnSymbolicItems = [encode_symbolic(X) || X <- Items],
-    PackedItems = [ [deltazip_util:varlen_encode(K),
-                     deltazip_util:varlen_encode(byte_size(V)),
+    PackedItems = [ [varlen_encode(K),
+                     varlen_encode(byte_size(V)),
                      V]
                     || {K,V} <- UnSymbolicItems],
     ItemsTotalSize = iolist_size(PackedItems),
-    Contents0 = [deltazip_util:varlen_encode(ItemsTotalSize) | PackedItems],
+    Contents0 = [varlen_encode(ItemsTotalSize) | PackedItems],
 
     %% Add checksum:
     Contents = iolist_to_binary(Contents0),
@@ -31,7 +33,7 @@ read(ReadFun, StartPos) when is_function(ReadFun,2),
                              is_integer(StartPos) ->
     VarlenReadSize = 5,
     MDSizeBin = ReadFun(StartPos, VarlenReadSize),
-    {MDSize, RestAfterMDSize} = deltazip_util:varlen_decode(MDSizeBin),
+    {MDSize, RestAfterMDSize} = varlen_decode(MDSizeBin),
     MDSizeLen = VarlenReadSize - byte_size(RestAfterMDSize),
     %% MDSizeLen is the number of bytes in which MDSize was encoded.
 
@@ -66,8 +68,8 @@ compute_mod255_checksum(Bin, Pos, Acc) ->
 parse_metadata_items(<<>>, Acc) ->
     lists:reverse(Acc);
 parse_metadata_items(Bin, Acc) ->
-    {KeyTagInt, Rest1} = deltazip_util:varlen_decode(Bin),
-    {ValueLength, Rest2} = deltazip_util:varlen_decode(Rest1),
+    {KeyTagInt, Rest1} = varlen_decode(Bin),
+    {ValueLength, Rest2} = varlen_decode(Rest1),
     <<Value:ValueLength/binary, Rest3/binary>> = Rest2,
     Item = decode_symbolic({KeyTagInt, Value}),
     parse_metadata_items(Rest3, [Item | Acc]).
