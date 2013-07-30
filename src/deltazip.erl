@@ -61,12 +61,13 @@
 %%   six bytes for the entire stream")
 -define(LIMIT_SO_DEFLATED_FITS_IN_64KB, 65000).
 
-%%%-------------------- ESCRIPT --------------------
+%%%==================== ESCRIPT ====================
 -spec main/1 :: ([string()]) -> any().
 main(Args) -> deltazip_cli:main(Args).
 
-%%%-------------------- API --------------------
+%%%==================== API ====================
 
+%%%---------- open() and helpers:
 -spec open/1 :: ({get_size_fun(), pread_fun()}) -> #dzstate{} | {error,_}.
 open(_Access={GetSizeFun, PReadFun}) when is_function(GetSizeFun,0),
 				is_function(PReadFun,2) ->
@@ -81,66 +82,6 @@ open(_Access={GetSizeFun, PReadFun}) when is_function(GetSizeFun,0),
 	{error, at_beginning} ->
 	    State2#dzstate{current_version = archive_is_empty}
     end.
-
-%%%---------- Version getters:
-
--spec get/1 :: (#dzstate{}) -> archive_is_empty | {binary(), metadata()}.
-get(#dzstate{current_version=Data, current_metadata=Metadata}) ->
-    if Data==archive_is_empty -> archive_is_empty;
-       true -> {Data, Metadata}
-    end.
-
--spec get_data/1 :: (#dzstate{}) -> binary() | archive_is_empty.
-get_data(#dzstate{current_version=Data}) -> Data.
-
--spec get_metadata/1 :: (#dzstate{}) -> archive_is_empty | metadata().
-get_metadata(#dzstate{current_version=Data, current_metadata=Metadata}) ->
-    if Data==archive_is_empty -> archive_is_empty;
-       true -> Metadata
-    end.
-
-%%%--------------------
-
--spec stats_for_current_entry/1 :: (#dzstate{}) -> {integer(), integer(), integer()}.
-stats_for_current_entry(#dzstate{current_method=M,
-				 current_size=Sz,
-				 current_checksum=Ck}) ->
-    {M, Sz, Ck}.
-
--spec(previous/1 :: (#dzstate{}) -> {ok, #dzstate{}} | {error, at_beginning}).
-previous(#dzstate{current_pos=CP}) when CP =< ?ARCHIVE_HEADER_LENGTH ->
-    {error, at_beginning};
-previous(State) ->
-    {ok, compute_current_version(goto_previous_position(State))}.
-
--spec add/2 :: (#dzstate{}, version_to_add()) -> archive_tail().
-add(State, NewRev) ->
-    add_multiple(State, [NewRev]).
-
--spec add_multiple/2 :: (#dzstate{}, [version_to_add()]) -> archive_tail().
-add_multiple(State, NewRevs) ->
-    opt_prepend_archive_header_to_append_spec(State, add_multiple2(State, NewRevs)).
-
-add_multiple2(State, NewRevs) ->
-    FormatVersion = State#dzstate.format_version,
-    case previous(set_initial_position(State)) of
-	{error, at_beginning} ->
-	    Z = State#dzstate.zip_handle,
-	    {0, pack_multiple(NewRevs, Z, FormatVersion)};
-	{ok, #dzstate{current_version = LastData,
-                      current_metadata = LastMD,
-		      current_pos = PrefixLength,
-		      zip_handle = Z}} ->
-            LastRev = {LastData, LastMD},
-	    NewTail = pack_multiple([LastRev | NewRevs], Z, FormatVersion),
-	    {PrefixLength, NewTail}
-    end.
-
--spec close/1 :: (#dzstate{}) -> any().
-close(#dzstate{zip_handle=Z}) ->
-    zlib:close(Z).
-
-%%%-------------------- Implementation --------------------
 
 check_magic_header(State) ->
     case magic_header_state(State) of
@@ -185,8 +126,39 @@ magic_header_state(#dzstate{get_size_fun=GetSizeFun,
 	    end
     end.
 
+%%%---------- Accessing current version: ----------
+
+-spec get/1 :: (#dzstate{}) -> archive_is_empty | {binary(), metadata()}.
+get(#dzstate{current_version=Data, current_metadata=Metadata}) ->
+    if Data==archive_is_empty -> archive_is_empty;
+       true -> {Data, Metadata}
+    end.
+
+-spec get_data/1 :: (#dzstate{}) -> binary() | archive_is_empty.
+get_data(#dzstate{current_version=Data}) -> Data.
+
+-spec get_metadata/1 :: (#dzstate{}) -> archive_is_empty | metadata().
+get_metadata(#dzstate{current_version=Data, current_metadata=Metadata}) ->
+    if Data==archive_is_empty -> archive_is_empty;
+       true -> Metadata
+    end.
+
+-spec stats_for_current_entry/1 :: (#dzstate{}) -> {integer(), integer(), integer()}.
+stats_for_current_entry(#dzstate{current_method=M,
+				 current_size=Sz,
+				 current_checksum=Ck}) ->
+    {M, Sz, Ck}.
+
+%%%---------- previous() and other cursor movement:
+
 set_initial_position(State=#dzstate{get_size_fun=GetSizeFun}) ->
     State#dzstate{current_pos=GetSizeFun()}.
+
+-spec(previous/1 :: (#dzstate{}) -> {ok, #dzstate{}} | {error, at_beginning}).
+previous(#dzstate{current_pos=CP}) when CP =< ?ARCHIVE_HEADER_LENGTH ->
+    {error, at_beginning};
+previous(State) ->
+    {ok, compute_current_version(goto_previous_position(State))}.
 
 -define(ENVELOPE_OVERHEAD, (4+4+4)). % Start-tag, checksum, end-tag.
 goto_previous_position(State=#dzstate{current_pos=Pos}=State) ->
@@ -237,6 +209,47 @@ compute_current_version(State=#dzstate{current_pos=Pos,
                   current_metadata = Metadata,
 		  current_checksum = ActualAdler}.
 
+%%%---------- add()/add_multiple() and helpers, excluding packing proper:
+
+-spec add/2 :: (#dzstate{}, version_to_add()) -> archive_tail().
+add(State, NewRev) ->
+    add_multiple(State, [NewRev]).
+
+-spec add_multiple/2 :: (#dzstate{}, [version_to_add()]) -> archive_tail().
+add_multiple(State, NewRevs) ->
+    opt_prepend_archive_header_to_append_spec(State, add_multiple2(State, NewRevs)).
+
+opt_prepend_archive_header_to_append_spec(State, AppendSpec={Pos,Tail}) ->
+    case State#dzstate.header_state of
+	valid -> AppendSpec;
+	empty when Pos == 0 ->
+            {Pos, [<<?DELTAZIP_MAGIC_HEADER:24/big,
+                     ?DEFAULT_VERSION_MAJOR:4, ?DEFAULT_VERSION_MINOR:4>>
+                       | Tail]}
+    end.
+
+add_multiple2(State, NewRevs) ->
+    FormatVersion = State#dzstate.format_version,
+    case previous(set_initial_position(State)) of
+	{error, at_beginning} ->
+	    Z = State#dzstate.zip_handle,
+	    {0, pack_multiple(NewRevs, Z, FormatVersion)};
+	{ok, #dzstate{current_version = LastData,
+                      current_metadata = LastMD,
+		      current_pos = PrefixLength,
+		      zip_handle = Z}} ->
+            LastRev = {LastData, LastMD},
+	    NewTail = pack_multiple([LastRev | NewRevs], Z, FormatVersion),
+	    {PrefixLength, NewTail}
+    end.
+
+%%%---------- close() and helpers:
+
+-spec close/1 :: (#dzstate{}) -> any().
+close(#dzstate{zip_handle=Z}) ->
+    zlib:close(Z).
+
+%%%==================== Packing (except concrete methods) ====================
 
 pack_multiple([], _Z, _FormatVersion) ->
     [];
@@ -256,30 +269,6 @@ version_to_data_and_metadata(Data) when is_binary(Data) ->
     {Data, []};
 version_to_data_and_metadata({Data,MD}) when is_binary(Data), is_list(MD) ->
     {Data,MD}.
-
-
-opt_prepend_archive_header_to_append_spec(State, AppendSpec={Pos,Tail}) ->
-    case State#dzstate.header_state of
-	valid -> AppendSpec;
-	empty when Pos == 0 ->
-            {Pos, [<<?DELTAZIP_MAGIC_HEADER:24/big,
-                     ?DEFAULT_VERSION_MAJOR:4, ?DEFAULT_VERSION_MINOR:4>>
-                       | Tail]}
-    end.
-
-%%%----------
-
-safe_pread(#dzstate{pread_fun=PReadFun}, Pos, Size) ->
-    case PReadFun(Pos, Size) of
-	{error, Reason} ->
-	    error({pread_error, Reason});
-	{ok, Bin} ->
-	    if byte_size(Bin) /= Size ->
-		    error({pread_error, {returned_wrong_amount, Size, byte_size(Bin)}});
-	       true ->
-		    Bin
-	    end
-    end.    
 
 envelope(FormatVersion, Metadata, RawVersion, {Method, Data0}) ->
     Data = iolist_to_binary(Data0),
@@ -308,22 +297,6 @@ envelope(FormatVersion, Metadata, RawVersion, {Method, Data0}) ->
     Adler32 = <<(erlang:adler32(RawVersion)):32>>,
     [Tag, Adler32, PackedMetadata, Data, Tag].
 
-%%%-------------------- Methods -------------------
-unpack_entry(State, Method, Data) ->
-%%     io:format("DB| unpack_entry: method=~p  raw-size=~p\n", [Method, byte_size(Data)]),
-    iolist_to_binary(unpack_entry_to_iolist(State, Method, Data)).
-
-unpack_entry_to_iolist(_State, ?METHOD_UNCOMPRESSED, Data) ->
-    unpack_uncompressed(Data);
-unpack_entry_to_iolist(State, ?METHOD_DEFLATED, Data) ->
-    unpack_deflated(Data, State#dzstate.zip_handle);
-unpack_entry_to_iolist(State, ?METHOD_CHUNKED, Data) ->
-    unpack_chunked(Data, State#dzstate.current_version, State#dzstate.zip_handle);
-unpack_entry_to_iolist(State, ?METHOD_CHUNKED_MIDDLE, Data) ->
-    unpack_chunked_middle(Data, State#dzstate.current_version, State#dzstate.zip_handle);
-unpack_entry_to_iolist(State, ?METHOD_CHUNKED_MIDDLE2, Data) ->
-    unpack_chunked_middle2(Data, State#dzstate.current_version, State#dzstate.zip_handle).
-
 select_method_and_pack_snapshot(Data, Z) ->
     pack_deflated(Data, Z).
 
@@ -340,11 +313,29 @@ select_method_and_pack_delta(Data, RefData, Z) ->
 			  ++ [fun pack_dittoflate/3 || AllowDitto]
 	      end,
     Packs = [begin P={_,Bin}=Method(Data, RefData, Z),
-		   
 		   {iolist_size(Bin), P}
 	     end || Method <- Methods],
     {_,BestPack} = hd(lists:keysort(1,Packs)),
     BestPack.
+
+%%%==================== Unpacking  (except concrete methods) ===============
+unpack_entry(State, Method, Data) ->
+%%     io:format("DB| unpack_entry: method=~p  raw-size=~p\n", [Method, byte_size(Data)]),
+    iolist_to_binary(unpack_entry_to_iolist(State, Method, Data)).
+
+unpack_entry_to_iolist(_State, ?METHOD_UNCOMPRESSED, Data) ->
+    unpack_uncompressed(Data);
+unpack_entry_to_iolist(State, ?METHOD_DEFLATED, Data) ->
+    unpack_deflated(Data, State#dzstate.zip_handle);
+unpack_entry_to_iolist(State, ?METHOD_CHUNKED, Data) ->
+    unpack_chunked(Data, State#dzstate.current_version, State#dzstate.zip_handle);
+unpack_entry_to_iolist(State, ?METHOD_CHUNKED_MIDDLE, Data) ->
+    unpack_chunked_middle(Data, State#dzstate.current_version, State#dzstate.zip_handle);
+unpack_entry_to_iolist(State, ?METHOD_CHUNKED_MIDDLE2, Data) ->
+    unpack_chunked_middle2(Data, State#dzstate.current_version, State#dzstate.zip_handle).
+
+
+%%%==================== Packing/unpacking, concrete methods ===============
 
 %%%----- Method UNCOMPRESSED:
 
@@ -448,6 +439,8 @@ spec_to_dsize(DSizeSpec) -> (2+DSizeSpec) * (?CHUNK_SIZE div 2).
 
 spec_to_rskip(RSkipSpec) -> RSkipSpec * (?CHUNK_SIZE div 2).
 
+%%%----- Chunk-methods:
+
 -define(DEFLATE_OVERHEAD_PENALTY_BYTES, 30).
 -define(COPY_OVERHEAD_PENALTY_BYTES, 3).
 evaluate_deflate_option(#deflate_option{rskip_spec = RSkipSpec, dsize = DSize}, Data, RefData, Z) ->
@@ -515,7 +508,7 @@ do_rskip(RSkipSpec, RefData) ->
     {RefChunk, _} = take_chunk(?WINDOW_SIZE, RestRefData),
     {RefChunk, RestRefData}.    
 
-%%%----- Method CHUNKED_MIDDLE:
+%%%----- Method CHUNKED_MIDDLE / CHUNKED_MIDDLE2:
 -define(CONTEXT_PRIORITIZE_PAST,   1).
 -define(CONTEXT_PRIORITIZE_FUTURE, 2).
 
@@ -590,3 +583,14 @@ take_end_chunk(MaxSize, Bin) when MaxSize < byte_size(Bin) ->
 is_version_after(Version={_,_}, Major, Minor) ->
     Version >= {Major, Minor}.
 
+safe_pread(#dzstate{pread_fun=PReadFun}, Pos, Size) ->
+    case PReadFun(Pos, Size) of
+	{error, Reason} ->
+	    error({pread_error, Reason});
+	{ok, Bin} ->
+	    if byte_size(Bin) /= Size ->
+		    error({pread_error, {returned_wrong_amount, Size, byte_size(Bin)}});
+	       true ->
+		    Bin
+	    end
+    end.
