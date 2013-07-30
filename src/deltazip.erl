@@ -6,7 +6,7 @@
 -export([stats_for_current_entry/1]).
 -export([main/1]).
 
--import(deltazip_util, [varlen_encode/1, varlen_decode/1]).
+-import(deltazip_iutil, [varlen_encode/1, varlen_decode/1]).
 
 -type archive_format_version() :: {Major::byte(), Minor::byte()}.
 -type get_size_fun() :: fun(() -> integer()).
@@ -60,8 +60,6 @@
 %%  "...an overhead of five bytes per 16 KB block (about 0.03%), plus a one-time overhead of
 %%   six bytes for the entire stream")
 -define(LIMIT_SO_DEFLATED_FITS_IN_64KB, 65000).
-
--define(EXCLUDE_ZLIB_HEADERS, dummy). % Flag.
 
 %%%-------------------- ESCRIPT --------------------
 -spec main/1 :: ([string()]) -> any().
@@ -357,10 +355,10 @@ unpack_uncompressed(Bin) -> Bin.
 %%%----- Method DEFLATED:
 
 pack_deflated(Bin, Z) ->
-    {?METHOD_DEFLATED, deflate(Z, Bin)}.
+    {?METHOD_DEFLATED, deltazip_iutil:deflate(Z, Bin)}.
 
 unpack_deflated(Bin, Z) ->
-    inflate(Z, Bin).
+    deltazip_iutil:inflate(Z, Bin).
 
 %%%----- Method DITTOFLATE: (experimental)
 pack_dittoflate(Data, RefData, Z) ->
@@ -381,7 +379,7 @@ unpack_chunked(<<?CHUNK_METHOD_DEFLATE:5, RSkipSpec:3/unsigned,
 			CompSize:16/unsigned, CompData:CompSize/binary,
 			Rest/binary>>, RefData, Z) ->
     {RefChunk, RestRefData} = do_rskip(RSkipSpec, RefData),
-    DataChunk = inflate(Z, CompData, RefChunk),
+    DataChunk = deltazip_iutil:inflate(Z, CompData, RefChunk),
     [DataChunk | unpack_chunked(Rest, RestRefData, Z)];
 unpack_chunked(<<?CHUNK_METHOD_PREFIX_COPY:5, 0:3,
 			2:16/unsigned, CopyLenM1:16/unsigned,
@@ -456,7 +454,7 @@ evaluate_deflate_option(#deflate_option{rskip_spec = RSkipSpec, dsize = DSize}, 
     {DataChunk, DataRest} = take_chunk(DSize, Data),
     {RefChunk, RestRefData} = do_rskip(RSkipSpec, RefData),
 
-    CompData = deflate(Z, DataChunk, RefChunk),
+    CompData = deltazip_iutil:deflate(Z, DataChunk, RefChunk),
     Ratio = (byte_size(CompData) + ?DEFLATE_OVERHEAD_PENALTY_BYTES) / byte_size(DataChunk),
 
     #evaled_chunk_option{ratio=Ratio,
@@ -592,73 +590,3 @@ take_end_chunk(MaxSize, Bin) when MaxSize < byte_size(Bin) ->
 is_version_after(Version={_,_}, Major, Minor) ->
     Version >= {Major, Minor}.
 
-%%--------------------
-
-%% -ifdef(EXCLUDE_ZLIB_HEADERS).
--define(ZLIB_WINDOW_SIZE_BITS, -15).
-%% -else.
-%% -define(ZLIB_WINDOW_SIZE_BITS, 15).
-%% -endif.
-
-deflate(Z, Data, RefData) ->
-    zlib:deflateInit(Z, best_compression, deflated, ?ZLIB_WINDOW_SIZE_BITS, 9, default),
-    zlib:deflateSetDictionary(Z, RefData),
-    CompData = iolist_to_binary(zlib:deflate(Z, Data, finish)),
-    zlib:deflateEnd(Z),
-    CompData.
-
-deflate(Z, Data) ->
-    zlib:deflateInit(Z, best_compression, deflated, ?ZLIB_WINDOW_SIZE_BITS, 9, default),
-    CompData = iolist_to_binary(zlib:deflate(Z, Data, finish)),
-    zlib:deflateEnd(Z),
-    CompData.
-    
--ifdef(EXCLUDE_ZLIB_HEADERS).
-inflate(Z, CompData, RefData) ->
-    zlib:inflateInit(Z, ?ZLIB_WINDOW_SIZE_BITS),
-
-    zlib:inflateSetDictionary(Z, RefData),
-    Data = zlib:inflate(Z, CompData),
-
-    zlib:inflateEnd(Z),
-    Data.
-
--else.
-inflate(Z, CompData, RefData) ->
-    zlib:inflateInit(Z, ?ZLIB_WINDOW_SIZE_BITS),
-
-    %% When zlib headers are on, inflateSetDictionary() can only be called after a failed inflate().
-    Data = try zlib:inflate(Z, CompData)
-	   catch error:{need_dictionary, _} ->
-		   zlib:inflateSetDictionary(Z, RefData),
-		   zlib:inflate(Z, CompData)
-	   end
-    end,
-    zlib:inflateEnd(Z),
-    Data.
--endif.
-    
-inflate(Z, CompData) ->
-    zlib:inflateInit(Z, ?ZLIB_WINDOW_SIZE_BITS),
-    Data = zlib:inflate(Z, CompData),
-    zlib:inflateEnd(Z),
-    Data.
-
-    
--ifdef(TEST). %============================================================
-varlen_test() ->
-    <<0>> = iolist_to_binary(varlen_encode(0)),
-    <<127>> = iolist_to_binary(varlen_encode(127)),
-    <<129,0>> = iolist_to_binary(varlen_encode(128)),
-    <<129,128, 0>> = iolist_to_binary(varlen_encode(1 bsl 14)),
-    
-    lists:foreach(fun(N) ->
-			  io:format("varlen_test: ~p\n", [N]),
-			  Bin = iolist_to_binary([varlen_encode(N), "Rest"]),
-			  {N, <<"Rest">>} = varlen_decode(Bin)
-		  end,
-		  [0,1, 127,128, 255,256, 1023,1024, 2000, 4000,
-		   60000, 80000, 1000000, 4000000000, 8000000000]),
-    ok.
-    
--endif.
