@@ -132,7 +132,7 @@ do_count(DZFile) ->
 
 count_entries(DZ) ->
     case deltazip:get(DZ) of
-	file_is_empty -> 0;
+	archive_is_empty -> 0;
 	_ -> count_entries(DZ, 1)
     end.
 
@@ -155,7 +155,7 @@ print_entry_stats(DZ) ->
     io:format("~s:\t~s\t~s\t~s\t~s\t~s\n",
               ["Nr", "Method", "CompSize", "VersionSize", "Checksum", "Metadata"]),
     case deltazip:get(DZ) of
-	file_is_empty -> 0;
+	archive_is_empty -> 0;
 	_ -> print_entry_stats(DZ, 0)
     end.
     
@@ -199,7 +199,7 @@ do_split(DZFile, Prefix) ->
 
 split_loop(DZ, Prefix, Nr) ->
     case deltazip:get_data(DZ) of
-	file_is_empty -> 0;
+	archive_is_empty -> 0;
 	Data ->
 	    FileName = lists:flatten(io_lib:format("~s~4..0b", [Prefix, Nr])),
 	    ok = file:write_file(FileName, Data),
@@ -221,7 +221,7 @@ do_rsplit(DZFile, Prefix) ->
 
 rsplit_loop(DZ, Prefix, Nr) ->
     case deltazip:get_data(DZ) of
-	file_is_empty -> 0;
+	archive_is_empty -> 0;
 	Data ->
 	    FileName = lists:flatten(io_lib:format("~s~4..0b", [Prefix, Nr])),
 	    ok = file:write_file(FileName, Data),
@@ -243,7 +243,7 @@ do_repack(OrgDZ, NewDZ) ->
 
 read_loop(DZ) ->
     case deltazip:get(DZ) of
-	file_is_empty -> [];
+	archive_is_empty -> [];
 	Item ->
 	    [Item | case deltazip:previous(DZ) of
 			{ok, DZ2} -> read_loop(DZ2);
