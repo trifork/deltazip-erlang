@@ -8,7 +8,7 @@ empty_test() ->
     Access0 = access(Bin0),
 
     DZa = deltazip:open(Access0),
-    file_is_empty = deltazip:get_data(DZa),
+    archive_is_empty = deltazip:get_data(DZa),
     {error, at_beginning} = deltazip:previous(DZa),
     deltazip:close(DZa).
 
@@ -65,9 +65,9 @@ two_revs_test() ->
 header_check_test() ->
     Bin1 = <<"DATA">>,
     Bin2 = <<"123">>, % Too short even for magic
-    ?assertMatch({'EXIT', {not_a_deltazip_file, _}},
+    ?assertMatch({'EXIT', {not_a_deltazip_archive, _}},
                  catch {ok, deltazip:open(access(Bin1))}),
-    ?assertMatch({'EXIT', {not_a_deltazip_file, _}},
+    ?assertMatch({'EXIT', {not_a_deltazip_archive, _}},
                  catch {ok, deltazip:open(access(Bin2))}),
 
     %% "Unsupported version" tests:

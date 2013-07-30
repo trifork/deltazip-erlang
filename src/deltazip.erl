@@ -8,10 +8,10 @@
 
 -import(deltazip_util, [varlen_encode/1, varlen_decode/1]).
 
--type file_format_version() :: {Major::byte(), Minor::byte()}.
+-type archive_format_version() :: {Major::byte(), Minor::byte()}.
 -type get_size_fun() :: fun(() -> integer()).
 -type pread_fun() :: fun((integer(),integer()) -> {ok, binary()} | {error,_}).
--type file_tail() :: {Pos::integer(), Tail::binary()}.
+-type archive_tail() :: {Pos::integer(), Tail::binary()}.
 
 -type metadata_keytag() :: atom() | integer().
 -type metadata_item() :: {metadata_keytag(), _}.
@@ -21,15 +21,15 @@
 
 -record(dzstate, {get_size_fun :: get_size_fun(),
 		  pread_fun    :: pread_fun(),
-                  format_version :: file_format_version(),
+                  format_version :: archive_format_version(),
 		  zip_handle,
-		  file_header_state :: empty | valid,
+		  header_state :: empty | valid,
 		  current_pos :: integer(),
 		  current_size :: integer(),
 		  current_method :: integer(),
                   current_has_meta :: boolean(),
                   current_metadata :: metadata(),
-		  current_version :: binary() | file_is_empty,
+		  current_version :: binary() | archive_is_empty,
 		  current_checksum :: integer()
 		 }).
 
@@ -37,7 +37,7 @@
 -define(DEFAULT_VERSION_MAJOR, 1).
 -define(DEFAULT_VERSION_MINOR, 1).
 
--define(FILE_HEADER_LENGTH, 4).
+-define(ARCHIVE_HEADER_LENGTH, 4).
 
 %% Snapshot methods (0-3):
 -define(METHOD_UNCOMPRESSED,   0).
@@ -81,23 +81,23 @@ open(_Access={GetSizeFun, PReadFun}) when is_function(GetSizeFun,0),
 	{ok, State3} ->
 	    State3;
 	{error, at_beginning} ->
-	    State2#dzstate{current_version = file_is_empty}
+	    State2#dzstate{current_version = archive_is_empty}
     end.
 
 %%%---------- Version getters:
 
--spec get/1 :: (#dzstate{}) -> file_is_empty | {binary(), metadata()}.
+-spec get/1 :: (#dzstate{}) -> archive_is_empty | {binary(), metadata()}.
 get(#dzstate{current_version=Data, current_metadata=Metadata}) ->
-    if Data==file_is_empty -> file_is_empty;
+    if Data==archive_is_empty -> archive_is_empty;
        true -> {Data, Metadata}
     end.
 
--spec get_data/1 :: (#dzstate{}) -> binary() | file_is_empty.
+-spec get_data/1 :: (#dzstate{}) -> binary() | archive_is_empty.
 get_data(#dzstate{current_version=Data}) -> Data.
 
--spec get_metadata/1 :: (#dzstate{}) -> file_is_empty | metadata().
+-spec get_metadata/1 :: (#dzstate{}) -> archive_is_empty | metadata().
 get_metadata(#dzstate{current_version=Data, current_metadata=Metadata}) ->
-    if Data==file_is_empty -> file_is_empty;
+    if Data==archive_is_empty -> archive_is_empty;
        true -> Metadata
     end.
 
@@ -110,18 +110,18 @@ stats_for_current_entry(#dzstate{current_method=M,
     {M, Sz, Ck}.
 
 -spec(previous/1 :: (#dzstate{}) -> {ok, #dzstate{}} | {error, at_beginning}).
-previous(#dzstate{current_pos=CP}) when CP =< ?FILE_HEADER_LENGTH ->
+previous(#dzstate{current_pos=CP}) when CP =< ?ARCHIVE_HEADER_LENGTH ->
     {error, at_beginning};
 previous(State) ->
     {ok, compute_current_version(goto_previous_position(State))}.
 
--spec add/2 :: (#dzstate{}, version_to_add()) -> file_tail().
+-spec add/2 :: (#dzstate{}, version_to_add()) -> archive_tail().
 add(State, NewRev) ->
     add_multiple(State, [NewRev]).
 
--spec add_multiple/2 :: (#dzstate{}, [version_to_add()]) -> file_tail().
+-spec add_multiple/2 :: (#dzstate{}, [version_to_add()]) -> archive_tail().
 add_multiple(State, NewRevs) ->
-    opt_prepend_file_header_to_append_spec(State, add_multiple2(State, NewRevs)).
+    opt_prepend_archive_header_to_append_spec(State, add_multiple2(State, NewRevs)).
 
 add_multiple2(State, NewRevs) ->
     FormatVersion = State#dzstate.format_version,
@@ -147,7 +147,7 @@ close(#dzstate{zip_handle=Z}) ->
 check_magic_header(State) ->
     case magic_header_state(State) of
 	invalid ->
-            error(not_a_deltazip_file),
+            error(not_a_deltazip_archive),
             HeaderState = FormatVersion = dummy;
         empty ->
             HeaderState = empty,
@@ -157,7 +157,7 @@ check_magic_header(State) ->
             HeaderState = valid,
             FormatVersion = {Major, Minor}
     end,
-    State#dzstate{file_header_state=HeaderState,
+    State#dzstate{header_state=HeaderState,
                   format_version=FormatVersion}.
 
 verify_deltazip_version_is_supported(Major, Minor) ->
@@ -260,8 +260,8 @@ version_to_data_and_metadata({Data,MD}) when is_binary(Data), is_list(MD) ->
     {Data,MD}.
 
 
-opt_prepend_file_header_to_append_spec(State, AppendSpec={Pos,Tail}) ->
-    case State#dzstate.file_header_state of
+opt_prepend_archive_header_to_append_spec(State, AppendSpec={Pos,Tail}) ->
+    case State#dzstate.header_state of
 	valid -> AppendSpec;
 	empty when Pos == 0 ->
             {Pos, [<<?DELTAZIP_MAGIC_HEADER:24/big,
@@ -374,6 +374,7 @@ pack_dittoflate(Data, RefData, Z) ->
 -define(CHUNK_METHOD_PREFIX_COPY, 1).
 -define(CHUNK_METHOD_OFFSET_COPY, 2).
 
+%% todo: separate loop from cases.
 unpack_chunked(<<>>, _RefData, _Z) ->
     <<>>;
 unpack_chunked(<<?CHUNK_METHOD_DEFLATE:5, RSkipSpec:3/unsigned,
