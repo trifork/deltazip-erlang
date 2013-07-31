@@ -5,7 +5,7 @@
 
 empty_test() ->
     Bin0 = <<>>,
-    Access0 = access(Bin0),
+    Access0 = deltazip_util:bin_access(Bin0),
 
     DZa = deltazip:open(Access0),
     archive_is_empty = deltazip:get_data(DZa),
@@ -14,15 +14,14 @@ empty_test() ->
 
 one_rev_test() ->
     Bin0 = <<>>,
-    Access0 = access(Bin0),
+    Access0 = deltazip_util:bin_access(Bin0),
     DZa = deltazip:open(Access0),
 
     Rev1 = <<"Hello">>,
-    AddSpec1 = deltazip:add(DZa, Rev1),
-    Bin1 = replace_tail(Bin0, AddSpec1),
+    Bin1 = deltazip:add(DZa, Rev1),
     deltazip:close(DZa),
     
-    Access1 = access(Bin1),
+    Access1 = deltazip_util:bin_access(Bin1),
     DZb = deltazip:open(Access1),
     Rev1 = deltazip:get_data(DZb), % assertion
     {error, at_beginning} = deltazip:previous(DZb),
@@ -31,29 +30,27 @@ one_rev_test() ->
 
 two_revs_test() ->
     Bin0 = <<>>,
-    Access0 = access(Bin0),
+    Access0 = deltazip_util:bin_access(Bin0),
     DZa = deltazip:open(Access0),
 
     %% Add Rev1.
     Rev1 = <<"Hello">>,
-    AddSpec1 = deltazip:add(DZa, Rev1),
-    Bin1 = replace_tail(Bin0, AddSpec1),
+    Bin1 = deltazip:add(DZa, Rev1),
     deltazip:close(DZa),
 
     %% Check that Rev1 was added.
-    Access1 = access(Bin1),
+    Access1 = deltazip_util:bin_access(Bin1),
     DZb = deltazip:open(Access1),
     Rev1 = deltazip:get_data(DZb), % assertion
     {error, at_beginning} = deltazip:previous(DZb),
 
     %% Add Rev2.
     Rev2 = <<"Hello, World!">>,
-    AddSpec2 = deltazip:add(DZb, Rev2),
-    Bin2 = replace_tail(Bin1, AddSpec2),
+    Bin2 = deltazip:add(DZb, Rev2),
     deltazip:close(DZb),
     
     %% Check that Rev2 was added - and that both Rev1 and Rev2 can be accessed.
-    Access2 = access(Bin2),
+    Access2 = deltazip_util:bin_access(Bin2),
     DZc = deltazip:open(Access2),
     Rev2 = deltazip:get_data(DZc), % assertion
     {ok,DZc2} = deltazip:previous(DZc),
@@ -66,9 +63,9 @@ header_check_test() ->
     Bin1 = <<"DATA">>,
     Bin2 = <<"123">>, % Too short even for magic
     ?assertMatch({'EXIT', {not_a_deltazip_archive, _}},
-                 catch {ok, deltazip:open(access(Bin1))}),
+                 catch {ok, deltazip:open(deltazip_util:bin_access(Bin1))}),
     ?assertMatch({'EXIT', {not_a_deltazip_archive, _}},
-                 catch {ok, deltazip:open(access(Bin2))}),
+                 catch {ok, deltazip:open(deltazip_util:bin_access(Bin2))}),
 
     %% "Unsupported version" tests:
     Bin3a = <<16#CEB47A:24, 0:4, 0:4>>,
@@ -76,7 +73,7 @@ header_check_test() ->
     Bin3c = <<16#CEB47A:24, 2:4, 0:4>>,
     [begin
          {'EXIT', {{unsupported_deltazip_version, Maj,Min},_}} =
-             (catch {ok, deltazip:open(access(B))}),
+             (catch {ok, deltazip:open(deltazip_util:bin_access(B))}),
          ?assertEqual({Major,Minor}, {Maj,Min})
      end
      || {B,Major,Minor} <- [{Bin3a,0,0},
@@ -86,7 +83,7 @@ header_check_test() ->
     %% Good case tests:
     Bin4a = <<16#CEB47A:24, 1:4, 0:4>>,
     Bin4b = <<16#CEB47A:24, 1:4, 1:4>>,
-    [?assertMatch({ok,_}, catch {ok, deltazip:open(access(B))})
+    [?assertMatch({ok,_}, catch {ok, deltazip:open(deltazip_util:bin_access(B))})
      || B <- [Bin4a, Bin4b]],
     ok.
 
@@ -152,14 +149,13 @@ test_random([], _OldRevs, _Bin) ->
     ok;
 test_random([Rev|Revs], OldRevs, Bin) ->
     io:format(user, "SZ| #~p: ~p -> ~p\n", [length(OldRevs), iolist_size(OldRevs), byte_size(Bin)]),
-    Access = access(Bin),
+    Access = deltazip_util:bin_access(Bin),
     DZ = deltazip:open(Access),
 
     verify_history(DZ, OldRevs),
 
     %% Add Rev:
-    AddSpec = deltazip:add(DZ, Rev),
-    Bin2 = replace_tail(Bin, AddSpec),
+    Bin2 = deltazip:add(DZ, Rev),
     deltazip:close(DZ),
     test_random(Revs, [Rev|OldRevs], Bin2).
 
@@ -168,14 +164,13 @@ test_batches([], _OldRevs, _Bin) ->
     ok;
 test_batches([Batch|Batches], OldRevs, Bin) ->
     io:format(user, "SZ| #~p: ~p -> ~p\n", [length(OldRevs), iolist_size(OldRevs), byte_size(Bin)]),
-    Access = access(Bin),
+    Access = deltazip_util:bin_access(Bin),
     DZ = deltazip:open(Access),
 
     verify_history(DZ, OldRevs),
 
     %% Add Batch:
-    AddSpec = deltazip:add_multiple(DZ, Batch),
-    Bin2 = replace_tail(Bin, AddSpec),
+    Bin2 = deltazip:add_multiple(DZ, Batch),
     deltazip:close(DZ),
     test_batches(Batches, lists:reverse(Batch,OldRevs), Bin2).
 
@@ -267,20 +262,4 @@ apply_variation_spec({split, PreLen, PreSpec, SufLen, SufSpec}, Bin) ->
     <<_:NonSufLen/binary, Suffix:SufLen/binary>> = Bin,
     [apply_variation_spec(PreSpec, Prefix) |
      apply_variation_spec(SufSpec, Suffix)].
-    
-%%%--------------------
-
-access(Bin) ->
-    GetSizeFun = fun() -> byte_size(Bin) end,
-    PReadFun   = fun(Pos,Size) ->
-			 <<_:Pos/binary, Data:Size/binary, _/binary>> = Bin,
-			 {ok, Data}
-		 end,
-    {GetSizeFun, PReadFun}.
-
-	     
-replace_tail(Bin, {PrefixLength, NewTail}) when is_integer(PrefixLength), (is_binary(NewTail) or is_list(NewTail)) ->
-    NewTailBin = iolist_to_binary(NewTail),
-    <<Prefix:PrefixLength/binary, _/binary>> = Bin,
-    <<Prefix/binary, NewTailBin/binary>>.
 

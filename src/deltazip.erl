@@ -6,12 +6,16 @@
 -export([stats_for_current_entry/1]).
 -export([main/1]).
 
+-export_type([get_size_fun/0, pread_fun/0, replace_tail_fun/1]).
+
 -import(deltazip_iutil, [varlen_encode/1, varlen_decode/1]).
+
+-include("../include/deltazip.hrl").
 
 -type archive_format_version() :: {Major::byte(), Minor::byte()}.
 -type get_size_fun() :: fun(() -> integer()).
 -type pread_fun() :: fun((integer(),integer()) -> {ok, binary()} | {error,_}).
--type archive_tail() :: {Pos::integer(), Tail::binary()}.
+-type replace_tail_fun(T) :: fun((Pos::integer(), Tail::binary()) -> T).
 
 -type metadata_keytag() :: atom() | integer().
 -type metadata_item() :: {metadata_keytag(), _}.
@@ -19,8 +23,7 @@
 
 -type version_to_add() :: [binary() | {binary(), metadata()}].
 
--record(dzstate, {get_size_fun :: get_size_fun(),
-		  pread_fun    :: pread_fun(),
+-record(dzstate, {access :: #dz_access{},
                   format_version :: archive_format_version(),
 		  zip_handle,
 		  header_state :: empty | valid,
@@ -68,13 +71,13 @@ main(Args) -> deltazip_cli:main(Args).
 %%%==================== API ====================
 
 %%%---------- open() and helpers:
--spec open/1 :: ({get_size_fun(), pread_fun()}) -> #dzstate{} | {error,_}.
-open(_Access={GetSizeFun, PReadFun}) when is_function(GetSizeFun,0),
-				is_function(PReadFun,2) ->
+-spec open/1 :: (#dz_access{}) -> #dzstate{} | {error,_}.
+open(#dz_access{get_size=GetSizeFun, pread=PReadFun, replace_tail=ReplaceTailFun}=Access)
+  when is_function(GetSizeFun,0),
+       is_function(PReadFun,2),
+       is_function(ReplaceTailFun,2) ->
     Z = zlib:open(),
-    State = #dzstate{get_size_fun= GetSizeFun,
-		     pread_fun   = PReadFun,
-		     zip_handle  = Z},
+    State = #dzstate{access = Access, zip_handle  = Z},
     State2 = set_initial_position(check_magic_header(State)),
     case previous(State2) of
 	{ok, State3} ->
@@ -84,7 +87,7 @@ open(_Access={GetSizeFun, PReadFun}) when is_function(GetSizeFun,0),
     end.
 
 check_magic_header(State) ->
-    case magic_header_state(State) of
+    case magic_header_state(State#dzstate.access) of
 	invalid ->
             error(not_a_deltazip_archive),
             HeaderState = FormatVersion = dummy;
@@ -108,9 +111,8 @@ verify_deltazip_version_is_supported(Major, Minor) ->
     end.
 
 
--spec(magic_header_state/1 :: (#dzstate{}) -> empty | invalid | {valid,byte(),byte()}).
-magic_header_state(#dzstate{get_size_fun=GetSizeFun,
-			    pread_fun=PReadFun}) ->
+-spec(magic_header_state/1 :: (#dz_access{}) -> empty | invalid | {valid,byte(),byte()}).
+magic_header_state(#dz_access{get_size=GetSizeFun, pread=PReadFun}) ->
     Size = GetSizeFun(),
     if Size == 0 ->
 	    empty;
@@ -151,7 +153,7 @@ stats_for_current_entry(#dzstate{current_method=M,
 
 %%%---------- previous() and other cursor movement:
 
-set_initial_position(State=#dzstate{get_size_fun=GetSizeFun}) ->
+set_initial_position(State=#dzstate{access=#dz_access{get_size=GetSizeFun}}) ->
     State#dzstate{current_pos=GetSizeFun()}.
 
 -spec(previous/1 :: (#dzstate{}) -> {ok, #dzstate{}} | {error, at_beginning}).
@@ -211,13 +213,16 @@ compute_current_version(State=#dzstate{current_pos=Pos,
 
 %%%---------- add()/add_multiple() and helpers, excluding packing proper:
 
--spec add/2 :: (#dzstate{}, version_to_add()) -> archive_tail().
+-spec add/2 :: (#dzstate{}, version_to_add()) -> term().
 add(State, NewRev) ->
     add_multiple(State, [NewRev]).
 
--spec add_multiple/2 :: (#dzstate{}, [version_to_add()]) -> archive_tail().
+-spec add_multiple/2 :: (#dzstate{}, [version_to_add()]) -> term().
 add_multiple(State, NewRevs) ->
-    opt_prepend_archive_header_to_append_spec(State, add_multiple2(State, NewRevs)).
+    {PrefixLength, NewTail} =
+        opt_prepend_archive_header_to_append_spec(State, add_multiple2(State, NewRevs)),
+    #dzstate{access=#dz_access{replace_tail=ReplaceTailFun}} = State,
+    ReplaceTailFun(PrefixLength, NewTail).
 
 opt_prepend_archive_header_to_append_spec(State, AppendSpec={Pos,Tail}) ->
     case State#dzstate.header_state of
@@ -228,7 +233,7 @@ opt_prepend_archive_header_to_append_spec(State, AppendSpec={Pos,Tail}) ->
                        | Tail]}
     end.
 
-add_multiple2(State, NewRevs) ->
+add_multiple2(State=#dzstate{}, NewRevs) ->
     FormatVersion = State#dzstate.format_version,
     case previous(set_initial_position(State)) of
 	{error, at_beginning} ->
@@ -240,7 +245,7 @@ add_multiple2(State, NewRevs) ->
 		      zip_handle = Z}} ->
             LastRev = {LastData, LastMD},
 	    NewTail = pack_multiple([LastRev | NewRevs], Z, FormatVersion),
-	    {PrefixLength, NewTail}
+            {PrefixLength, NewTail}
     end.
 
 %%%---------- close() and helpers:
@@ -583,7 +588,7 @@ take_end_chunk(MaxSize, Bin) when MaxSize < byte_size(Bin) ->
 is_version_after(Version={_,_}, Major, Minor) ->
     Version >= {Major, Minor}.
 
-safe_pread(#dzstate{pread_fun=PReadFun}, Pos, Size) ->
+safe_pread(#dzstate{access=#dz_access{pread=PReadFun}}, Pos, Size) ->
     case PReadFun(Pos, Size) of
 	{error, Reason} ->
 	    error({pread_error, Reason});
