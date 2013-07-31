@@ -368,29 +368,35 @@ pack_dittoflate(Data, RefData, Z) ->
 -define(CHUNK_METHOD_PREFIX_COPY, 1).
 -define(CHUNK_METHOD_OFFSET_COPY, 2).
 
-%% todo: separate loop from cases.
-unpack_chunked(<<>>, _RefData, _Z) ->
-    <<>>;
-unpack_chunked(<<?CHUNK_METHOD_DEFLATE:5, RSkipSpec:3/unsigned,
-			CompSize:16/unsigned, CompData:CompSize/binary,
-			Rest/binary>>, RefData, Z) ->
+unpack_chunked(Input, RefData, Z) ->
+    unpack_chunked_loop(Input, RefData, Z, []).
+
+unpack_chunked_loop(<<>>, _RefData, _Z, Acc) ->
+    lists:reverse(Acc);
+unpack_chunked_loop(<<Method:5, Param:3/unsigned,
+                      CompSize:16/unsigned, CompData:CompSize/binary,
+                   Rest/binary>>, RefData, Z, Acc) ->
+    {DataChunk, RestRefData} =
+        unpack_one_chunk(Method, Param, CompData, RefData, Z),
+    unpack_chunked_loop(Rest, RestRefData, Z, [DataChunk | Acc]).
+
+unpack_one_chunk(?CHUNK_METHOD_DEFLATE, RSkipSpec, CompData,
+                 RefData, Z) ->
     {RefChunk, RestRefData} = do_rskip(RSkipSpec, RefData),
     DataChunk = deltazip_iutil:inflate(Z, CompData, RefChunk),
-    [DataChunk | unpack_chunked(Rest, RestRefData, Z)];
-unpack_chunked(<<?CHUNK_METHOD_PREFIX_COPY:5, 0:3,
-			2:16/unsigned, CopyLenM1:16/unsigned,
-			Rest/binary>>, RefData, Z) ->
+    {DataChunk, RestRefData};
+unpack_one_chunk(?CHUNK_METHOD_PREFIX_COPY, 0, <<CopyLenM1:16/unsigned>>,
+                 RefData, _Z) ->
     CopyLen = CopyLenM1 + 1,
     {DataChunk, RestRefData} = erlang:split_binary(RefData, CopyLen),
-    [DataChunk | unpack_chunked(Rest, RestRefData, Z)];
-unpack_chunked(<<?CHUNK_METHOD_OFFSET_COPY:5, 0:3,
-			4:16/unsigned, OffsetM1:16/unsigned, CopyLenM1:16/unsigned,
-			Rest/binary>>, RefData, Z) ->
+    {DataChunk, RestRefData};
+unpack_one_chunk(?CHUNK_METHOD_OFFSET_COPY, 0, <<OffsetM1:16/unsigned, CopyLenM1:16/unsigned>>,
+                 RefData, _Z) ->
     CopyLen = CopyLenM1 + 1,
     Offset = OffsetM1 + 1,
     {_, OffsetRefData} = erlang:split_binary(RefData, Offset),
     {DataChunk, RestRefData} = erlang:split_binary(OffsetRefData, CopyLen),
-    [DataChunk | unpack_chunked(Rest, RestRefData, Z)].
+    {DataChunk, RestRefData}.
 
 -record(deflate_option, {rskip_spec, dsize}).
 -record(evaled_chunk_option, {ratio, chunk_method, comp_data, data_rest, ref_rest}).
