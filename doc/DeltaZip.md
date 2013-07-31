@@ -19,6 +19,9 @@ DeltaZip is a compact file format for storing a sequence of versions of a file.
 
 By taking advantage of the redundancy in the version history, the sequence can be stored very compactly, compared to storing each version separately.
 
+DeltaZip builds on the DEFLATE compression algorithm, specified in
+RFC 1951 ("DEFLATE Compressed Data Format").
+
 ## File format overview
 
 A DeltaZip file (or DeltaZip archive) consists of a sequence of *chapters*, each containing one version of the file. The last chapter contains the latest version, using normal compression - it is a *self-contained* chapter. In the other, previous chapters, the corresponding version is stored, expressed as the *difference* between that version and the following - they are *delta-chapters*.
@@ -175,6 +178,8 @@ The notation "array[a;b]" means the sub-array which is obtained by
 taking the "b" first elements of "array", then removing the first "a"
 elements.
 
+Only the decompression algorithms are shown.
+
 #### The "Chunked" compression method:
 
     chunked-chapter-data ::= chunk*
@@ -238,6 +243,8 @@ Algorithm for "Chunked":
         apply prefix-copy-chunk-data(copy_lengthM1);
     }
 
+"inflate_with_dict()" refers to the Inflate algorithm of RFC1951,
+using the specified dictionary.
 
 #### The "Chunked Middle" compression method:
 
