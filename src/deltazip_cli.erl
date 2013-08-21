@@ -183,7 +183,7 @@ stringify_metadata(Metadata) ->
     string:join(L, "; ").
 
 stringify_metadata_value(timestamp, {{Y,Mo,D},{H,Mi,S}}) ->
-    io_lib:format("~4b-~2..0b-~2..0b ~2..0b:~2..0b:~2..0b", [Y,Mo,D,H,Mi,S]);
+    io_lib:format("~4b-~2..0b-~2..0bT~2..0b:~2..0b:~2..0bZ", [Y,Mo,D,H,Mi,S]);
 stringify_metadata_value(_, Value) ->
     Value.
 
@@ -282,7 +282,7 @@ parse_specific_metadata("timestamp", ValueStr) ->
             Datetime = calendar:gregorian_seconds_to_datetime(GregSecs),
             {timestamp, Datetime};
         TSStr ->
-            case io_lib:fread("~4d-~2d-~2d ~2d:~2d:~2d", TSStr) of
+            case io_lib:fread("~4d-~2d-~2dT~2d:~2d:~2dZ", TSStr) of
                 {ok, [Y,Mo,D, H,Mi,S],  []} ->
                     Datetime = {{Y,Mo,D}, {H,Mi,S}},
                     {timestamp, Datetime};
