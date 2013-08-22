@@ -226,7 +226,7 @@ add_multiple(State, NewRevs) ->
 
 opt_prepend_archive_header_to_append_spec(State, AppendSpec={Pos,Tail}) ->
     case State#dzstate.header_state of
-	valid -> AppendSpec;
+	valid when Pos >= 4 -> AppendSpec;
 	empty when Pos == 0 ->
             {Pos, [<<?DELTAZIP_MAGIC_HEADER:24/big,
                      ?DEFAULT_VERSION_MAJOR:4, ?DEFAULT_VERSION_MINOR:4>>
@@ -238,7 +238,8 @@ add_multiple2(State=#dzstate{}, NewRevs) ->
     case previous(set_initial_position(State)) of
 	{error, at_beginning} ->
 	    Z = State#dzstate.zip_handle,
-	    {0, pack_multiple(NewRevs, Z, FormatVersion)};
+            PrefixLength = State#dzstate.current_pos,
+	    {PrefixLength, pack_multiple(NewRevs, Z, FormatVersion)};
 	{ok, #dzstate{current_version = LastData,
                       current_metadata = LastMD,
 		      current_pos = PrefixLength,
