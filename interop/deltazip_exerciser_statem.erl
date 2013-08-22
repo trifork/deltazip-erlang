@@ -14,14 +14,20 @@ initial_state() ->
     [{<<>>, []}].
 
 command(Archives) ->
-    oneof([{call, ?MODULE, add_to_archive, [impl(), oneof(Archives), versions()]}]).
+    ?LET({Archive={_,OldVersions},VersionSpecs}, {oneof(Archives), versions()},
+         begin
+             {VarSpecs, MDs} = lists:unzip(VersionSpecs),
+             NewVersionData = further_versions_for(OldVersions, VarSpecs),
+             NewVersions = lists:zip(NewVersionData, MDs),
+             {call, ?MODULE, add_to_archive, [impl(), Archive, NewVersions]}
+         end).
 
 precondition(_State, _Cmd) -> true.
 
-next_state(Archives, Var, {call, ?MODULE, add_to_archive, [Impl, OldArchive, NewVersions]}) ->
+next_state(Archives, Var, {call, ?MODULE, add_to_archive, [_Impl, OldArchive, NewVersions]}) ->
     try
         %% io:format(user, "DB| next_state: state=~p  var=~p\n", [Archives, Var]),
-        {OldBin, OldVersions} = OldArchive,
+        {_OldBin, OldVersions} = OldArchive,
         NewArchive = {Var, OldVersions ++ NewVersions},
         [NewArchive | Archives]
     catch Cls:Err ->
@@ -30,7 +36,7 @@ next_state(Archives, Var, {call, ?MODULE, add_to_archive, [Impl, OldArchive, New
             erlang:raise(Cls,Err,Trace)
     end.
 
-postcondition(_State, {call, ?MODULE, add_to_archive, [_Impl, {OldArchive,OldVersions}, NewVersions]}, NewArchive) ->
+postcondition(_State, {call, ?MODULE, add_to_archive, [_Impl, {_OldArchive,OldVersions}, NewVersions]}, NewArchive) ->
     %% TODO: Verify with Java as well.
     EAllVersions = extract_all_versions_erlang(NewArchive),
     (EAllVersions == OldVersions++NewVersions).
@@ -57,7 +63,7 @@ add_to_archive_erlang(OldBin, NewVersions) ->
 extract_all_versions_erlang(Archive) ->
     DZ = deltazip:open(deltazip_util:bin_access(Archive)),
     {DZ2,Versions} = extract_all_versions_erlang(DZ, []),
-    ok = deltazip:close(DZ),
+    ok = deltazip:close(DZ2),
     Versions.
 
 extract_all_versions_erlang(DZ, Acc) ->
@@ -75,7 +81,7 @@ extract_all_versions_erlang(DZ, Acc) ->
 impl() -> oneof([erlang]).
 
 versions() -> list(version()).
-version() -> {binary(), list(metadata_item())}.
+version() -> {variation_spec(), list(metadata_item())}.
 metadata_item() -> oneof([{version_id, metadata_value()},
                           {ancestor, metadata_value()},
                           {timestamp, datetime()},
@@ -86,3 +92,41 @@ metadata_value() -> binary().
 datetime() ->
     {{choose(2000,2130), choose(1,12), choose(1,28)},
      {choose(0,23), choose(0,59), choose(0,59)}}.
+
+variation_spec() ->
+    frequency([{2, same},
+               {1, drop},
+               {1, {replace, binary()}},
+               {3, {split,
+                    real_0_1(), ?DELAY(variation_spec()),
+                    real_0_1(), ?DELAY(variation_spec())}}
+              ]).
+
+real_0_1() ->
+    ?LET(X, choose(0,1 bsl 32), X / (1 bsl 32)).
+
+apply_variation_spec(same, Bin) -> Bin;
+apply_variation_spec(drop, _Bin) -> <<>>;
+apply_variation_spec({replace, NewBin}, _Bin) -> NewBin;
+apply_variation_spec({split, PreRatio, PreSpec, SufRatio, SufSpec}, Bin) ->
+    PreLen = trunc(PreRatio * byte_size(Bin)),
+    SufLen = trunc(SufRatio * byte_size(Bin)),
+    <<Prefix:PreLen/binary, _/binary>> = Bin,
+    NonSufLen =  byte_size(Bin) - SufLen,
+    <<_:NonSufLen/binary, Suffix:SufLen/binary>> = Bin,
+    [apply_variation_spec(PreSpec, Prefix) |
+     apply_variation_spec(SufSpec, Suffix)].
+
+further_versions_for(OldVersions, VarSpecs) ->
+    LastVersion = case OldVersions of
+                      [] -> <<>>;
+                      _ ->
+                          {LastData,_MD} = lists:last(OldVersions),
+                          LastData 
+                  end,
+    {NewVersions,_} =
+        lists:mapfoldl(fun(VarSpec, PrevVersion) ->
+                               V = iolist_to_binary(apply_variation_spec(VarSpec,PrevVersion)),
+                               {V,V}
+                       end, LastVersion, VarSpecs),
+    NewVersions.
