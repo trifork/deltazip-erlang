@@ -53,6 +53,7 @@ add_to_archive_erlang(OldBin, NewVersions) ->
     Access = deltazip_util:bin_access(OldBin),
     DZ = deltazip:open(Access),
     NewBin = deltazip:add_multiple(DZ, NewVersions),
+    ok = deltazip:close(DZ),
     NewBin.
 
 %%%========== Generators: ========================================
