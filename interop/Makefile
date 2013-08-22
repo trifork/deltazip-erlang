@@ -21,6 +21,7 @@ build-java: report_paths
 	javac -classpath "${CLASSPATH}:target" -d target *.java
 
 build-erlang:
+	-mkdir target
 	erlc '+{be,erlang}' -o generated deltazip.idl
 	erlc  -o target generated/oe_deltazip.erl
 	erlc  -o target -pa deps/triq/ebin -I deps *.erl
