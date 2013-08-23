@@ -41,10 +41,15 @@ next_state(Archives, Var, {call, ?MODULE, add_to_archive, [_Impl, OldArchive, Ne
 postcondition(_State, {call, ?MODULE, add_to_archive, [_Impl, {_OldArchive,OldVersions}, NewVersions]}, NewArchive) ->
     %% TODO: Verify with Java as well.
     ExpectedVersions = OldVersions++NewVersions,
+
     EAllVersions = extract_all_versions_erlang(NewArchive),
     ErlangCheck = EAllVersions == ExpectedVersions,
-    ErlangCheck orelse error_logger:error_msg("Discrepancy: Expected ~p,\n  got ~p\n", [ExpectedVersions, EAllVersions]),
-    ErlangCheck.
+    ErlangCheck orelse error_logger:error_msg("Discrepancy (E): Expected ~p,\n  got ~p\n", [ExpectedVersions, EAllVersions]),
+
+    JAllVersions = extract_all_versions_java(NewArchive),
+    JavaCheck = JAllVersions == ExpectedVersions,
+    JavaCheck orelse error_logger:error_msg("Discrepancy (J): Expected ~p,\n  got ~p\n", [ExpectedVersions, JAllVersions]),
+    ErlangCheck and JavaCheck.
 
 %%%========== Implementation bridge: ========================================
 add_to_archive(erlang, {OldBin,_}, NewVersions) ->
@@ -80,24 +85,6 @@ add_to_archive_java(OldBin, NewVersions) ->
         NewBinFromIDL -> idl_decode_binary(NewBinFromIDL)
     end.
 
-idl_encode_versions(Versions) ->
-    [#'DeltaZipExerciser_Version'{
-        content=idl_encode_binary(D),
-        metadata=[idl_encode_metadata_item(MD) || MD <- MDs]
-       }
-     || {D,MDs} <- Versions].
-
-idl_encode_metadata_item(MDItem) ->
-    {Keytag, Value} = deltazip_metadata:encode_symbolic(MDItem),
-    #'DeltaZipExerciser_MetadataItem'{
-                          keytag=Keytag,
-                          value=idl_encode_binary(Value)}.
-
-idl_encode_binary(X) ->
-    binary_to_list(base64:encode(X)).
-idl_decode_binary(X) ->
-    base64:decode(list_to_binary(X)).
-
 extract_all_versions_erlang(Archive) ->
     DZ = deltazip:open(deltazip_util:bin_access(Archive)),
     {DZ2,Versions} = extract_all_versions_erlang(DZ, []),
@@ -114,6 +101,49 @@ extract_all_versions_erlang(DZ, Acc) ->
                 {ok, DZ2} -> extract_all_versions_erlang(DZ2, Acc2)
             end
     end.
+
+extract_all_versions_java(Archive) ->
+    {ok,Host}=inet:gethostname(),
+    JavaServer = {dummy, list_to_atom("deltazip_java@"++Host)},
+
+    %% At present, the Java IDL bindings won't know of binaries :-/
+    ArchiveEnc = idl_encode_binary(Archive),
+    Request = {extract_all_versions, ArchiveEnc},
+
+    %% io:format("DB| Request to Java: ~p\n", [Request]),
+    case gen_server:call(JavaServer, Request) of
+        {error, Err} -> error({java_side_error, Err});
+        AllVersionsIDL -> idl_decode_versions(AllVersionsIDL)
+    end.
+
+%%%========== Conversions to and from IDL: ===================================
+
+idl_encode_versions(Versions) ->
+    [#'DeltaZipExerciser_Version'{
+        content=idl_encode_binary(D),
+        metadata=[idl_encode_metadata_item(MD) || MD <- MDs]
+       }
+     || {D,MDs} <- Versions].
+
+idl_encode_metadata_item(MDItem) ->
+    {Keytag, Value} = deltazip_metadata:encode_symbolic(MDItem),
+    #'DeltaZipExerciser_MetadataItem'{
+                          keytag=Keytag,
+                          value=idl_encode_binary(Value)}.
+idl_decode_versions(Versions) ->
+    [{idl_decode_binary(D), [idl_decode_metadata_item(MD) || MD <- MDs]}
+     || #'DeltaZipExerciser_Version'{content=D, metadata=MDs} <- Versions].
+
+idl_decode_metadata_item(#'DeltaZipExerciser_MetadataItem'{
+                            keytag=Keytag,
+                            value=Value}) ->
+    
+    deltazip_metadata:decode_symbolic({Keytag, idl_decode_binary(Value)}).
+
+idl_encode_binary(X) ->
+    binary_to_list(base64:encode(X)).
+idl_decode_binary(X) ->
+    base64:decode(list_to_binary(X)).
 
 %%%========== Generators: ========================================
 impl() -> oneof([erlang, java]).
