@@ -10,6 +10,8 @@
 -include_lib("triq/include/triq.hrl").
 -include_lib("triq/include/triq_statem.hrl").
 
+-include_lib("DeltaZipExerciser.hrl").
+
 initial_state() ->
     [{<<>>, []}].
 
@@ -76,15 +78,16 @@ add_to_archive_java(OldBin, NewVersions) ->
     end.
 
 idl_encode_versions(Versions) ->
-    [{'DeltaZipExerciser_Version',
-      binary_to_list(D),
-      [idl_encode_metadata_item(MD) || MD <- MDs]}
+    [#'DeltaZipExerciser_Version'{
+        content=binary_to_list(D),
+        metadata=[idl_encode_metadata_item(MD) || MD <- MDs]
+       }
      || {D,MDs} <- Versions].
 
 idl_encode_metadata_item({Keytag, Value}) ->
-    {'DeltaZipExerciser_MetadataItem',
-     Keytag,
-     binary_to_list(Value)}.
+    #'DeltaZipExerciser_MetadataItem'{
+                          keytag=Keytag,
+                          value=binary_to_list(Value)}.
 
 %% recode_with_lists(X) when is_binary(X) -> binary_to_list(X);
 %% recode_with_lists(X) when is_list(X) -> [recode_with_lists(A) || A <- X];

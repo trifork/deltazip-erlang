@@ -25,7 +25,7 @@ build-erlang:
 	-mkdir target
 	erlc '+{be,erlang}' -o generated deltazip.idl
 	erlc  -o target generated/oe_deltazip.erl
-	erlc  -o target -pa deps/triq/ebin -I deps *.erl
+	erlc  -o target -pa deps/triq/ebin -I deps -I generated *.erl
 
 run:
 	${MAKE} run-java &
