@@ -8,7 +8,7 @@ public class DeltaZipExerciserImpl extends _DeltaZipExerciserImplBase {
 
     public DeltaZipExerciserPackage.Version[] extract_all_versions(byte[] archive)
         throws java.lang.Exception {
-        System.err.println("In add_to_archive\n");
+        System.err.println("In extract_all_versions\n");
         return null;
     }
 

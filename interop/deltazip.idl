@@ -1,23 +1,25 @@
-// #include <erlang.idl>;
-
-module erlang {
-    // an erlang binary
-    typedef sequence<octet> binary;
-};
+// #include <erlang.idl>
+//
+// module erlang {
+//     // an erlang binary
+//     typedef sequence<octet> binary;
+// };
 
 interface DeltaZipExerciser {
+    typedef sequence<octet> binary;
+
     struct MetadataItem {
         unsigned long keytag;
-        erlang::binary value;
+        binary value;
     };
 
     struct Version {
-        erlang::binary content;
+        binary content;
         sequence<MetadataItem> metadata;
     };
 
     typedef sequence <Version> Versions;
 
-    erlang::binary add_to_archive(in erlang::binary archive, in Versions versions);
-    Versions extract_all_versions(in erlang::binary archive);
+    binary add_to_archive(in binary archive, in Versions versions);
+    Versions extract_all_versions(in binary archive);
 };

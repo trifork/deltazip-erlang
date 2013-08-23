@@ -1,9 +1,13 @@
 public class DeltaZipExerciserServer {
     // The following is based on the program in lib/ic/examples/java-client-server/server.java
-    static java.lang.String snode = "deltazip_java";
-    static java.lang.String cookie = "cookie";
- 
+
     public static void main(String[] args) throws java.io.IOException, com.ericsson.otp.erlang.OtpAuthException {
+        if (args.length != 2) {
+            System.err.println("Usage: java DeltaZipExerciserServer <nodename> <cookie>");
+            System.exit(1);
+        }
+        String snode = args[0];
+        String cookie = args[1];
  
         com.ericsson.otp.erlang.OtpServer self = new com.ericsson.otp.erlang.OtpServer(snode, cookie);
  

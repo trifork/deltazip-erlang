@@ -49,9 +49,9 @@ add_to_archive(erlang, {OldBin,_}, NewVersions) ->
             Trace = erlang:get_stacktrace(),
             io:format(user, "DB| add_to_archive failed: ~p\n** trace: ~p\n", [Err, Trace]),
             erlang:raise(Cls,Err,Trace)
-    end.
-
-%% TODO: Add Java.
+    end;
+add_to_archive(java, {OldBin,_}, NewVersions) ->
+    add_to_archive_java(OldBin, NewVersions).
 
 add_to_archive_erlang(OldBin, NewVersions) ->
     Access = deltazip_util:bin_access(OldBin),
@@ -59,6 +59,37 @@ add_to_archive_erlang(OldBin, NewVersions) ->
     try deltazip:add_multiple(DZ, NewVersions)
     after ok = deltazip:close(DZ)
     end.
+
+add_to_archive_java(OldBin, NewVersions) ->
+    {ok,Host}=inet:gethostname(),
+    JavaServer = {dummy, list_to_atom("deltazip_java@"++Host)},
+
+    %% At present, the Java IDL bindings won't know of binaries :-/
+    NewVersionsEnc = idl_encode_versions(NewVersions),
+    OldBinEnc = binary_to_list(OldBin),
+    Request = {add_to_archive, OldBinEnc, NewVersionsEnc},
+
+    io:format("DB| Request to Java: ~p\n", [Request]),
+    case gen_server:call(JavaServer, Request) of
+        {error, Err} -> error({java_side_error, Err});
+        NewBinAsList -> list_to_binary(NewBinAsList)
+    end.
+
+idl_encode_versions(Versions) ->
+    [{'DeltaZipExerciser_Version',
+      binary_to_list(D),
+      [idl_encode_metadata_item(MD) || MD <- MDs]}
+     || {D,MDs} <- Versions].
+
+idl_encode_metadata_item({Keytag, Value}) ->
+    {'DeltaZipExerciser_MetadataItem',
+     Keytag,
+     binary_to_list(Value)}.
+
+%% recode_with_lists(X) when is_binary(X) -> binary_to_list(X);
+%% recode_with_lists(X) when is_list(X) -> [recode_with_lists(A) || A <- X];
+%% recode_with_lists(X) when is_integer(X) -> X;
+%% recode_with_lists({X,Y}) -> {recode_with_lists(X), recode_with_lists(Y)}.
 
 extract_all_versions_erlang(Archive) ->
     DZ = deltazip:open(deltazip_util:bin_access(Archive)),
@@ -78,7 +109,7 @@ extract_all_versions_erlang(DZ, Acc) ->
     end.
 
 %%%========== Generators: ========================================
-impl() -> oneof([erlang]).
+impl() -> oneof([erlang, java]).
 
 versions() -> list(version()).
 version() -> {variation_spec(), list(metadata_item())}.
