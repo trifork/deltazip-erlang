@@ -6,7 +6,7 @@
 // };
 
 interface DeltaZipExerciser {
-    typedef sequence<octet> binary;
+    typedef string binary; // base64-encoded. ic's Java-implementation is poor.
 
     struct MetadataItem {
         unsigned long keytag;

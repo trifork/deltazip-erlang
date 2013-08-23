@@ -17,9 +17,8 @@ build: build-java build-erlang
 build-java: report_paths
 	-mkdir generated target
 	erlc '+{be,java}' -o generated -I "${IC_ROOT}/include" deltazip.idl
-	#javac -classpath "${CLASSPATH}" -d target generated/erlang/*.java
 	javac -classpath "${CLASSPATH}:target" -d target generated/*.java generated/*/*.java generated/*/*/*.java  -Xlint:deprecation
-	javac -classpath "${CLASSPATH}:target" -d target *.java
+	javac -classpath "${CLASSPATH}:${DELTAZIP_CLASSPATH}:target" -d target *.java
 
 build-erlang:
 	-mkdir target
@@ -32,7 +31,7 @@ run:
 	${MAKE} run-erlang
 
 run-java:
-	java -classpath "${CLASSPATH}:target" DeltaZipExerciserServer deltazip_java cookie 
+	java -classpath "${CLASSPATH}:${DELTAZIP_CLASSPATH}:target" DeltaZipExerciserServer deltazip_java cookie 
 
 run-erlang:
 	erl -noshell -noinput -pa target deps/triq/ebin ../ebin -sname 'deltazip-erlang' -setcookie cookie -eval 'deltazip_exerciser:run(), init:stop().'
@@ -47,6 +46,7 @@ clean:
 report_paths:
 	@echo "ERL_ROOT is ${ERL_ROOT}"
 	@echo "IC_ROOT is ${IC_ROOT}"
+	@echo "DELTAZIP_CLASSPATH is ${DELTAZIP_CLASSPATH}"
 	@echo "CLASSPATH is ${CLASSPATH}"
 
 .PHONY: all clean report_paths

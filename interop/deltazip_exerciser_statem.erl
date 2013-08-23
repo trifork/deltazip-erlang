@@ -40,8 +40,11 @@ next_state(Archives, Var, {call, ?MODULE, add_to_archive, [_Impl, OldArchive, Ne
 
 postcondition(_State, {call, ?MODULE, add_to_archive, [_Impl, {_OldArchive,OldVersions}, NewVersions]}, NewArchive) ->
     %% TODO: Verify with Java as well.
+    ExpectedVersions = OldVersions++NewVersions,
     EAllVersions = extract_all_versions_erlang(NewArchive),
-    (EAllVersions == OldVersions++NewVersions).
+    ErlangCheck = EAllVersions == ExpectedVersions,
+    ErlangCheck orelse error_logger:error_msg("Discrepancy: Expected ~p,\n  got ~p\n", [ExpectedVersions, EAllVersions]),
+    ErlangCheck.
 
 %%%========== Implementation bridge: ========================================
 add_to_archive(erlang, {OldBin,_}, NewVersions) ->
@@ -68,31 +71,32 @@ add_to_archive_java(OldBin, NewVersions) ->
 
     %% At present, the Java IDL bindings won't know of binaries :-/
     NewVersionsEnc = idl_encode_versions(NewVersions),
-    OldBinEnc = binary_to_list(OldBin),
+    OldBinEnc = idl_encode_binary(OldBin),
     Request = {add_to_archive, OldBinEnc, NewVersionsEnc},
 
-    io:format("DB| Request to Java: ~p\n", [Request]),
+    %% io:format("DB| Request to Java: ~p\n", [Request]),
     case gen_server:call(JavaServer, Request) of
         {error, Err} -> error({java_side_error, Err});
-        NewBinAsList -> list_to_binary(NewBinAsList)
+        NewBinFromIDL -> idl_decode_binary(NewBinFromIDL)
     end.
 
 idl_encode_versions(Versions) ->
     [#'DeltaZipExerciser_Version'{
-        content=binary_to_list(D),
+        content=idl_encode_binary(D),
         metadata=[idl_encode_metadata_item(MD) || MD <- MDs]
        }
      || {D,MDs} <- Versions].
 
-idl_encode_metadata_item({Keytag, Value}) ->
+idl_encode_metadata_item(MDItem) ->
+    {Keytag, Value} = deltazip_metadata:encode_symbolic(MDItem),
     #'DeltaZipExerciser_MetadataItem'{
                           keytag=Keytag,
-                          value=binary_to_list(Value)}.
+                          value=idl_encode_binary(Value)}.
 
-%% recode_with_lists(X) when is_binary(X) -> binary_to_list(X);
-%% recode_with_lists(X) when is_list(X) -> [recode_with_lists(A) || A <- X];
-%% recode_with_lists(X) when is_integer(X) -> X;
-%% recode_with_lists({X,Y}) -> {recode_with_lists(X), recode_with_lists(Y)}.
+idl_encode_binary(X) ->
+    binary_to_list(base64:encode(X)).
+idl_decode_binary(X) ->
+    base64:decode(list_to_binary(X)).
 
 extract_all_versions_erlang(Archive) ->
     DZ = deltazip:open(deltazip_util:bin_access(Archive)),
