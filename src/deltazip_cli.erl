@@ -66,9 +66,8 @@ do_create2(DZFile, Datas) ->
     {ok, Fd} = file:open(DZFile, [write, exclusive, binary]),
     Access = deltazip_util:file_access(Fd),
     DZ = deltazip:open(Access),
-    {0, Data} = deltazip:add_multiple(DZ, Datas),
+    ok = deltazip:add_multiple(DZ, Datas),
     deltazip:close(DZ),
-    ok = file:write(Fd, Data),
     ok = file:close(Fd).
 
 %%%----------
