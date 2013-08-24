@@ -102,8 +102,6 @@ The defined versions are 1.0 and 1.1.
 
     chapter-tag ::= {Method:4, Metas:1, Size:27}
     metadata    : See the "Chapter metadata" section.
-    metadata_item ::= (Tag:varlen_int) (MDSize:varlen_int) (MD:byte[MDSize])
-
 
 The leading and trailing chapter-tag must be identical.
 
@@ -226,7 +224,7 @@ Algorithm for "Chunked":
 
     apply deflate-chunk-data(params, chunk_data) {
         rskip := params * RSKIP_GRANULARITY;
-        org_pos := org_pos + rskip;
+        org_pos := min(org_pos + rskip, |org|)
         dict := org[org_pos; min(org_pos + WINDOW_SIZE, |org|)]
         output := output ++ inflate_with_dict(chunk_data, dict, window_size:32, zlib_headers:off)
     }
